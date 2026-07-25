@@ -5,9 +5,13 @@ import logging
 import random
 import numpy as np
 import gradio as gr
-from typing import Optional, Tuple
-from funasr import AutoModel
+from typing import Any, Optional, Tuple
 from pathlib import Path
+
+try:
+    from funasr import AutoModel
+except ImportError:  # funasr is optional — only needed for auto-transcription (ASR)
+    AutoModel = None
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -232,7 +236,7 @@ class VoxCPMDemo:
 
         self.asr_model_id = "iic/SenseVoiceSmall"
         self.asr_device = "cuda:0" if self.device.startswith("cuda") else "cpu"
-        self.asr_model: Optional[AutoModel] = None
+        self.asr_model: Optional[Any] = None
 
         self.voxcpm_model: Optional[voxcpm.VoxCPM] = None
         self._model_id = model_id
@@ -249,7 +253,13 @@ class VoxCPMDemo:
         logger.info("Model loaded successfully.")
         return self.voxcpm_model
 
-    def get_or_load_asr_model(self) -> AutoModel:
+    def get_or_load_asr_model(self) -> "AutoModel":
+        if AutoModel is None:
+            raise RuntimeError(
+                "funasr is not installed — automatic transcription of the reference audio "
+                "is unavailable. Install it with `pip install funasr`, or type the "
+                "transcript manually in the prompt text field."
+            )
         if self.asr_model is not None:
             return self.asr_model
         logger.info(f"Loading ASR model: {self.asr_model_id} on device: {self.asr_device}")
