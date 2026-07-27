@@ -158,6 +158,7 @@ _I18N_TRANSLATIONS = {
         "seed_info": "Seed used for reproducible generation. Updated with the actual successful seed after generation.",
         "random_seed_label": "Random Seed",
         "random_seed_info": "Generate a new seed before each inference run.",
+        "preset_lang_label": "🌐 Language",
         "preset_voices_label": "🎭 Preset narration voices",
         "preset_voices_info": "Pick a voice to auto-fill the description and seed.",
         "preview_btn_label": "🔊 Preview this voice",
@@ -193,6 +194,7 @@ _I18N_TRANSLATIONS = {
         "seed_info": "Graine utilisée pour une génération reproductible. Mise à jour avec la graine réellement utilisée après génération.",
         "random_seed_label": "Graine aléatoire",
         "random_seed_info": "Génère une nouvelle graine avant chaque inférence.",
+        "preset_lang_label": "🌐 Langue",
         "preset_voices_label": "🎭 Voix prédéfinies (narration)",
         "preset_voices_info": "Choisissez une voix pour remplir automatiquement la description et le seed.",
         "preview_btn_label": "🔊 Écouter un aperçu de la voix",
@@ -224,6 +226,7 @@ _I18N_TRANSLATIONS = {
         "cfg_info": "数值越高 → 越贴合提示/参考音色；数值越低 → 生成风格更自由",
         "dit_steps_label": "LocDiT 流匹配迭代步数",
         "dit_steps_info": "LocDiT 流匹配生成迭代步数 — 步数越多 → 可能生成更好的音频质量，但速度变慢",
+        "preset_lang_label": "🌐 语言",
         "preset_voices_label": "🎭 预设旁白语音",
         "preset_voices_info": "选择一个语音以自动填充描述和随机种子。",
         "preview_btn_label": "🔊 试听该语音",
@@ -336,6 +339,7 @@ def _load_preset_voices() -> List[dict]:
                 "cfg": float(item.get("cfg", 2.0)),
                 "diffusion_steps": int(item.get("diffusion_steps", 10)),
                 "normalize": bool(item.get("normalize", True)),
+                "lang": str(item.get("lang", "fr")),
             }
             for item in data
         ]
@@ -349,10 +353,26 @@ def _load_preset_voices() -> List[dict]:
 
 
 PRESET_VOICES = _load_preset_voices()
+for _v in PRESET_VOICES:  # every voice has a language (defaults to French)
+    _v.setdefault("lang", "fr")
 
 # Label of the "leave everything free" option (current default behavior).
 PRESET_CUSTOM_LABEL = "Personnalisé / manuel"
 _PRESET_BY_NAME = {v["name"]: v for v in PRESET_VOICES}
+
+# Distinct languages present, and human labels for the language selector. The
+# selector only appears in the UI when more than one language is available.
+_PRESET_LANGS = sorted({v["lang"] for v in PRESET_VOICES})
+_LANG_LABELS = {"fr": "Français", "en": "English", "zh": "中文", "es": "Español", "de": "Deutsch", "it": "Italiano"}
+
+
+def _lang_label(code: str) -> str:
+    return _LANG_LABELS.get(code, code)
+
+
+def _voice_names_for_lang(lang: Optional[str]) -> List[str]:
+    """Preset voice names for a language (all voices when lang is None)."""
+    return [v["name"] for v in PRESET_VOICES if lang is None or v["lang"] == lang]
 
 # ---------- Long-text chunking (audiobooks) ----------
 # Split on sentence boundaries so each generated chunk stays a reasonable length,
@@ -633,6 +653,13 @@ def create_demo_interface(demo: VoxCPMDemo):
     def _on_random_seed_toggle(checked):
         return gr.update(interactive=not checked)
 
+    def _on_lang_change(lang):
+        """Restrict the voice dropdown to the chosen language and reset to Custom."""
+        return gr.update(
+            choices=[PRESET_CUSTOM_LABEL] + _voice_names_for_lang(lang),
+            value=PRESET_CUSTOM_LABEL,
+        )
+
     def _on_preset_change(preset_name):
         """Fill the Voice Design fields from a preset. 'Personnalisé' = no-op."""
         preset = _PRESET_BY_NAME.get(preset_name)
@@ -791,8 +818,15 @@ def create_demo_interface(demo: VoxCPMDemo):
                     lines=2,
                     visible=False,
                 )
+                _default_lang = _PRESET_LANGS[0] if _PRESET_LANGS else None
+                preset_lang = gr.Dropdown(
+                    choices=[(_lang_label(c), c) for c in _PRESET_LANGS],
+                    value=_default_lang,
+                    label=I18N("preset_lang_label"),
+                    visible=len(_PRESET_LANGS) > 1,  # only show when there is a choice to make
+                )
                 preset_voice = gr.Dropdown(
-                    choices=[PRESET_CUSTOM_LABEL] + [v["name"] for v in PRESET_VOICES],
+                    choices=[PRESET_CUSTOM_LABEL] + _voice_names_for_lang(_default_lang),
                     value=PRESET_CUSTOM_LABEL,
                     label=I18N("preset_voices_label"),
                     info=I18N("preset_voices_info"),
@@ -894,6 +928,12 @@ def create_demo_interface(demo: VoxCPMDemo):
             fn=_on_random_seed_toggle,
             inputs=[random_seed],
             outputs=[seed_value],
+        )
+
+        preset_lang.change(
+            fn=_on_lang_change,
+            inputs=[preset_lang],
+            outputs=[preset_voice],
         )
 
         preset_voice.change(

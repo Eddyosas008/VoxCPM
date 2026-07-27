@@ -5,7 +5,8 @@
     "seed": 4110390676,
     "cfg": 2.0,
     "diffusion_steps": 10,
-    "normalize": true
+    "normalize": true,
+    "lang": "fr"
   },
   {
     "name": "Narratrice douce & naturelle",
@@ -13,7 +14,8 @@
     "seed": 3227543575,
     "cfg": 2.0,
     "diffusion_steps": 10,
-    "normalize": true
+    "normalize": true,
+    "lang": "fr"
   },
   {
     "name": "Conteur jeune & dynamique",
@@ -21,7 +23,8 @@
     "seed": 2151638728,
     "cfg": 2.0,
     "diffusion_steps": 10,
-    "normalize": true
+    "normalize": true,
+    "lang": "fr"
   },
   {
     "name": "Narratrice chaleureuse & conversationnelle",
@@ -29,7 +32,8 @@
     "seed": 3023399458,
     "cfg": 2.0,
     "diffusion_steps": 10,
-    "normalize": true
+    "normalize": true,
+    "lang": "fr"
   },
   {
     "name": "Narrateur documentaire velouté",
@@ -37,7 +41,8 @@
     "seed": 1468538221,
     "cfg": 2.0,
     "diffusion_steps": 10,
-    "normalize": true
+    "normalize": true,
+    "lang": "fr"
   },
   {
     "name": "Narrateur moderne & professionnel",
@@ -45,7 +50,8 @@
     "seed": 3515672692,
     "cfg": 2.0,
     "diffusion_steps": 10,
-    "normalize": true
+    "normalize": true,
+    "lang": "fr"
   },
   {
     "name": "Méditation guidée (grave & lente)",
@@ -53,6 +59,7 @@
     "seed": 560505514,
     "cfg": 2.0,
     "diffusion_steps": 10,
-    "normalize": true
+    "normalize": true,
+    "lang": "fr"
   }
 ]
