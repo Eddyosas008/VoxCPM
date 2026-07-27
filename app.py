@@ -163,6 +163,8 @@ _I18N_TRANSLATIONS = {
         "preview_btn_label": "🔊 Preview this voice",
         "chunking_label": "Split long texts (audiobooks)",
         "chunking_info": "Automatically split long texts into sentence chunks and stitch the audio together.",
+        "chunk_size_label": "Max characters per chunk",
+        "chunk_size_info": "Target size of each chunk when splitting long texts (whole sentences are kept together).",
         "load_txt_label": "📄 Load a .txt file",
         "usage_instructions": _USAGE_INSTRUCTIONS_EN,
         "examples_footer": _EXAMPLES_FOOTER_EN,
@@ -196,6 +198,8 @@ _I18N_TRANSLATIONS = {
         "preview_btn_label": "🔊 Écouter un aperçu de la voix",
         "chunking_label": "Découper les longs textes (livres audio)",
         "chunking_info": "Découpe automatiquement les longs textes en segments de phrases et assemble l'audio.",
+        "chunk_size_label": "Caractères max par segment",
+        "chunk_size_info": "Taille cible de chaque segment lors du découpage (les phrases entières restent groupées).",
         "load_txt_label": "📄 Charger un fichier .txt",
         "usage_instructions": _USAGE_INSTRUCTIONS_FR,
         "examples_footer": _EXAMPLES_FOOTER_FR,
@@ -225,6 +229,8 @@ _I18N_TRANSLATIONS = {
         "preview_btn_label": "🔊 试听该语音",
         "chunking_label": "拆分长文本（有声书）",
         "chunking_info": "自动将长文本按句子拆分并拼接音频。",
+        "chunk_size_label": "每段最大字符数",
+        "chunk_size_info": "拆分长文本时每段的目标长度（整句会保持在一起）。",
         "load_txt_label": "📄 加载 .txt 文件",
         "usage_instructions": _USAGE_INSTRUCTIONS_ZH,
         "examples_footer": _EXAMPLES_FOOTER_ZH,
@@ -665,6 +671,7 @@ def create_demo_interface(demo: VoxCPMDemo):
         dit_steps: int,
         seed_value,
         enable_chunking: bool,
+        chunk_max_chars: int,
         preset_name: str = "",
         progress=gr.Progress(),
     ):
@@ -685,7 +692,7 @@ def create_demo_interface(demo: VoxCPMDemo):
         )
 
         # Only chunk plain Voice Design / control text — cloning modes keep a single pass.
-        chunks = _split_text_into_chunks(text) if enable_chunking else []
+        chunks = _split_text_into_chunks(text, int(chunk_max_chars)) if enable_chunking else []
         if len(chunks) <= 1 or ref_wav or actual_prompt_text:
             sr, wav_np, last_successful_seed = demo.generate_tts_audio(text_input=text, **common)
         else:
@@ -828,6 +835,14 @@ def create_demo_interface(demo: VoxCPMDemo):
                         elem_classes=["switch-toggle"],
                         info=I18N("chunking_info"),
                     )
+                    chunk_max_chars = gr.Slider(
+                        minimum=100,
+                        maximum=600,
+                        value=_CHUNK_MAX_CHARS,
+                        step=20,
+                        label=I18N("chunk_size_label"),
+                        info=I18N("chunk_size_info"),
+                    )
                     cfg_value = gr.Slider(
                         minimum=1.0,
                         maximum=3.0,
@@ -930,6 +945,7 @@ def create_demo_interface(demo: VoxCPMDemo):
                 dit_steps,
                 seed_value,
                 enable_chunking,
+                chunk_max_chars,
                 preset_voice,
             ],
             outputs=[audio_output, seed_value],
