@@ -1,11 +1,12 @@
 import os
 import re
 import sys
+import json
 import logging
 import random
 import numpy as np
 import gradio as gr
-from typing import Any, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from pathlib import Path
 
 try:
@@ -99,6 +100,38 @@ _EXAMPLES_FOOTER_ZH = (
     "将普通话翻译为方言文本，再粘贴到 Target Text 中即可。  \n\n"
 )
 
+_USAGE_INSTRUCTIONS_FR = (
+    "**VoxCPM2 — Trois modes de génération vocale :**\n\n"
+    "🎨 **Création de voix** — Créer une voix inédite  \n"
+    "Aucun audio de référence requis. Décrivez les caractéristiques de la voix souhaitée "
+    "(genre, âge, timbre, émotion, débit…) dans **Description de la voix / style**, et VoxCPM2 "
+    "façonnera une voix unique à partir de votre seule description.\n\n"
+    "🎛️ **Clonage contrôlé** — Cloner une voix avec un guidage de style optionnel  \n"
+    "Téléversez un extrait audio de référence, puis utilisez **Description de la voix / style** pour "
+    "orienter l'émotion, le débit et le style global tout en préservant le timbre d'origine.\n\n"
+    "🎙️ **Clonage ultime** — Reproduire chaque nuance vocale par continuation audio  \n"
+    "Activez le **Mode clonage ultime** et fournissez (ou faites transcrire automatiquement) le texte "
+    "de l'audio de référence. Le modèle traite l'extrait comme un préfixe déjà prononcé et le **continue** "
+    "de façon fluide, en préservant fidèlement chaque détail vocal. "
+    "Note : ce mode désactive la Description de la voix / style."
+)
+
+_EXAMPLES_FOOTER_FR = (
+    "---\n"
+    "**💡 Exemples de description de voix :**  \n"
+    "Essayez les descriptions suivantes pour explorer différentes voix :  \n\n"
+    "**Exemple 1 — Jeune fille douce et mélancolique**  \n"
+    '`Description`: *"Une jeune fille à la voix douce et suave. '
+    'Parle lentement, avec un ton mélancolique et légèrement boudeur."*  \n'
+    "`Texte cible`: *\"Je ne t'ai jamais demandé de rester… Ce n'est pas comme si ça me faisait "
+    "quelque chose. Mais… pourquoi est-ce que ça fait encore aussi mal maintenant que tu es parti ?\"*  \n\n"
+    "**Exemple 2 — Surfeur décontracté**  \n"
+    '`Description`: *"Voix masculine jeune et relâchée, légèrement nasillarde, '
+    'débit traînant, très décontractée et cool."*  \n'
+    '`Texte cible`: *"Mec, t\'as vu cette série de vagues ? La houle est totalement démente aujourd\'hui. '
+    "J'ai enchaîné les tubes toute la matinée — c'est juste, genre, parfait, tu vois ce que je veux dire ?\"*"
+)
+
 _I18N_TRANSLATIONS = {
     "en": {
         "reference_audio_label": "🎤 Reference Audio (optional — upload for cloning)",
@@ -124,8 +157,47 @@ _I18N_TRANSLATIONS = {
         "seed_info": "Seed used for reproducible generation. Updated with the actual successful seed after generation.",
         "random_seed_label": "Random Seed",
         "random_seed_info": "Generate a new seed before each inference run.",
+        "preset_voices_label": "🎭 Preset narration voices",
+        "preset_voices_info": "Pick a voice to auto-fill the description and seed.",
+        "preview_btn_label": "🔊 Preview this voice",
+        "chunking_label": "Split long texts (audiobooks)",
+        "chunking_info": "Automatically split long texts into sentence chunks and stitch the audio together.",
+        "load_txt_label": "📄 Load a .txt file",
         "usage_instructions": _USAGE_INSTRUCTIONS_EN,
         "examples_footer": _EXAMPLES_FOOTER_EN,
+    },
+    "fr": {
+        "reference_audio_label": "🎤 Audio de référence (optionnel — pour le clonage)",
+        "show_prompt_text_label": "🎙️ Mode clonage ultime (clonage guidé par le texte)",
+        "show_prompt_text_info": "Transcrit automatiquement l'audio de référence pour reproduire chaque nuance vocale. La Description de la voix / style sera désactivée quand ce mode est actif.",
+        "prompt_text_label": "Transcription de l'audio de référence (remplie via ASR, modifiable)",
+        "prompt_text_placeholder": "La transcription de votre audio de référence apparaîtra ici …",
+        "control_label": "🎛️ Description de la voix / style (optionnel — français, anglais, chinois)",
+        "control_placeholder": "ex. Voix masculine chaleureuse / Jeune femme douce / Rapide et enthousiaste",
+        "target_text_label": "✍️ Texte à synthétiser — le contenu à dire",
+        "generate_btn": "🔊 Générer la voix",
+        "generated_audio_label": "Audio généré",
+        "advanced_settings_title": "⚙️ Réglages avancés",
+        "ref_denoise_label": "Amélioration de l'audio de référence",
+        "ref_denoise_info": "Applique un débruitage ZipEnhancer à l'audio de référence avant le clonage",
+        "normalize_label": "Normalisation du texte",
+        "normalize_info": "Normalise les nombres, dates et abréviations (via wetext)",
+        "cfg_label": "CFG (intensité du guidage)",
+        "cfg_info": "Plus élevé → plus fidèle à la description / référence ; plus bas → variation plus créative",
+        "dit_steps_label": "Étapes de diffusion (LocDiT)",
+        "dit_steps_info": "Étapes de flow-matching LocDiT — plus d'étapes → qualité potentiellement meilleure, mais plus lent",
+        "seed_label": "Graine (seed)",
+        "seed_info": "Graine utilisée pour une génération reproductible. Mise à jour avec la graine réellement utilisée après génération.",
+        "random_seed_label": "Graine aléatoire",
+        "random_seed_info": "Génère une nouvelle graine avant chaque inférence.",
+        "preset_voices_label": "🎭 Voix prédéfinies (narration)",
+        "preset_voices_info": "Choisissez une voix pour remplir automatiquement la description et le seed.",
+        "preview_btn_label": "🔊 Écouter un aperçu de la voix",
+        "chunking_label": "Découper les longs textes (livres audio)",
+        "chunking_info": "Découpe automatiquement les longs textes en segments de phrases et assemble l'audio.",
+        "load_txt_label": "📄 Charger un fichier .txt",
+        "usage_instructions": _USAGE_INSTRUCTIONS_FR,
+        "examples_footer": _EXAMPLES_FOOTER_FR,
     },
     "zh-CN": {
         "reference_audio_label": "🎤 参考音频（可选 — 上传后用于克隆）",
@@ -147,6 +219,12 @@ _I18N_TRANSLATIONS = {
         "cfg_info": "数值越高 → 越贴合提示/参考音色；数值越低 → 生成风格更自由",
         "dit_steps_label": "LocDiT 流匹配迭代步数",
         "dit_steps_info": "LocDiT 流匹配生成迭代步数 — 步数越多 → 可能生成更好的音频质量，但速度变慢",
+        "preset_voices_label": "🎭 预设旁白语音",
+        "preset_voices_info": "选择一个语音以自动填充描述和随机种子。",
+        "preview_btn_label": "🔊 试听该语音",
+        "chunking_label": "拆分长文本（有声书）",
+        "chunking_info": "自动将长文本按句子拆分并拼接音频。",
+        "load_txt_label": "📄 加载 .txt 文件",
         "usage_instructions": _USAGE_INSTRUCTIONS_ZH,
         "examples_footer": _EXAMPLES_FOOTER_ZH,
     },
@@ -166,6 +244,144 @@ I18N = gr.I18n(**_I18N_TRANSLATIONS)
 DEFAULT_TARGET_TEXT = (
     "VoxCPM2 is a creative multilingual TTS model from ModelBest, " "designed to generate highly realistic speech."
 )
+
+# ---------- Preset voices for narration (Voice Design mode) ----------
+# Each entry regenerates the exact same voice when its (description, seed) pair is
+# reused. Common defaults for all: CFG=2.0, diffusion steps=10, normalize=True.
+# Built-in defaults below. To add/edit/remove voices WITHOUT touching this file,
+# create conf/preset_voices.json (same keys) — it overrides the built-in list.
+_BUILTIN_PRESET_VOICES = [
+    {
+        "name": "Narrateur profond & calme",
+        "description": "Voix masculine française de narrateur pour livre audio, profonde, calme et posée, timbre chaleureux et rassurant, débit lent et immersif, diction claire et articulée",
+        "seed": 4110390676,
+        "cfg": 2.0,
+        "diffusion_steps": 10,
+        "normalize": True,
+    },
+    {
+        "name": "Narratrice douce & naturelle",
+        "description": "Voix féminine française de narratrice pour livre audio, douce et naturelle, timbre chaleureux et authentique, débit fluide et posé, diction claire, ton captivant et apaisant",
+        "seed": 3227543575,
+        "cfg": 2.0,
+        "diffusion_steps": 10,
+        "normalize": True,
+    },
+    {
+        "name": "Conteur jeune & dynamique",
+        "description": "Voix masculine française de jeune conteur d'environ vingt-cinq ans pour livre audio, dynamique et expressive, ton vivant et engageant, débit naturel, idéale pour la narration d'histoires",
+        "seed": 2151638728,
+        "cfg": 2.0,
+        "diffusion_steps": 10,
+        "normalize": True,
+    },
+    {
+        "name": "Narratrice chaleureuse & conversationnelle",
+        "description": "Voix féminine française d'âge mûr pour livre audio, chaleureuse et engageante, style conversationnel et charmant, ton bienveillant et proche de l'auditeur, diction naturelle",
+        "seed": 3023399458,
+        "cfg": 2.0,
+        "diffusion_steps": 10,
+        "normalize": True,
+    },
+    {
+        "name": "Narrateur documentaire velouté",
+        "description": "Voix masculine française de narrateur de documentaire, veloutée et posée, ton professionnel empreint de mystère et d'émerveillement, diction soignée, idéale pour nature, science et histoire",
+        "seed": 1468538221,
+        "cfg": 2.0,
+        "diffusion_steps": 10,
+        "normalize": True,
+    },
+    {
+        "name": "Narrateur moderne & professionnel",
+        "description": "Voix masculine française moderne, claire et profonde, ton assuré et régulier, débit confiant et professionnel, idéale pour la narration, les podcasts et les livres audio contemporains",
+        "seed": 3515672692,
+        "cfg": 2.0,
+        "diffusion_steps": 10,
+        "normalize": True,
+    },
+    {
+        "name": "Méditation guidée (grave & lente)",
+        "description": "Voix masculine française très grave et profonde pour méditation guidée, extrêmement lente et douce, ton chaud, apaisant et enveloppant, chuchoté et relaxant, longues pauses, respiration calme, idéale pour la détente et la relaxation",
+        "seed": 560505514,
+        "cfg": 2.0,
+        "diffusion_steps": 10,
+        "normalize": True,
+    },
+]
+
+# Optional external override: conf/preset_voices.json (a JSON list of objects with
+# the same keys). Lets non-developers curate the voice list without editing code.
+_PRESET_VOICES_JSON = Path(__file__).parent / "conf" / "preset_voices.json"
+
+
+def _load_preset_voices() -> List[dict]:
+    """Return voices from conf/preset_voices.json if valid, else the built-in list."""
+    if not _PRESET_VOICES_JSON.is_file():
+        return _BUILTIN_PRESET_VOICES
+    try:
+        with open(_PRESET_VOICES_JSON, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        voices = [
+            {
+                "name": str(item["name"]),
+                "description": str(item["description"]),
+                "seed": int(item["seed"]),
+                "cfg": float(item.get("cfg", 2.0)),
+                "diffusion_steps": int(item.get("diffusion_steps", 10)),
+                "normalize": bool(item.get("normalize", True)),
+            }
+            for item in data
+        ]
+        if not voices:
+            raise ValueError("no voices found in JSON")
+        logger.info(f"Loaded {len(voices)} preset voices from {_PRESET_VOICES_JSON}")
+        return voices
+    except Exception as e:
+        logger.warning(f"Could not load {_PRESET_VOICES_JSON} ({e}); using built-in presets.")
+        return _BUILTIN_PRESET_VOICES
+
+
+PRESET_VOICES = _load_preset_voices()
+
+# Label of the "leave everything free" option (current default behavior).
+PRESET_CUSTOM_LABEL = "Personnalisé / manuel"
+_PRESET_BY_NAME = {v["name"]: v for v in PRESET_VOICES}
+
+# ---------- Long-text chunking (audiobooks) ----------
+# Split on sentence boundaries so each generated chunk stays a reasonable length,
+# then stitch the audio with a short silence between chunks.
+_CHUNK_MAX_CHARS = 300
+_CHUNK_SILENCE_SEC = 0.3
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…。！？\n])\s+")
+
+# Short fixed phrase used to preview a preset voice on demand.
+_PREVIEW_TEXT = "Bonjour, ceci est un aperçu de cette voix pour la narration de votre livre audio."
+_PREVIEW_DIR = Path(__file__).parent / "assets" / "voice_previews"
+
+
+def _split_text_into_chunks(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> List[str]:
+    """Greedily pack whole sentences into chunks no longer than ``max_chars``.
+    A single sentence longer than the limit becomes its own chunk."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+    chunks: List[str] = []
+    current = ""
+    for sentence in sentences:
+        if len(sentence) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(sentence)
+        elif current and len(current) + 1 + len(sentence) > max_chars:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = f"{current} {sentence}" if current else sentence
+    if current:
+        chunks.append(current)
+    return chunks
 
 _CUSTOM_CSS = """
 .logo-container {
@@ -229,10 +445,20 @@ _APP_THEME = gr.themes.Soft(
 
 
 class VoxCPMDemo:
-    def __init__(self, model_id: str = "openbmb/VoxCPM2", device: str = "auto") -> None:
+    def __init__(
+        self,
+        model_id: str = "openbmb/VoxCPM2",
+        device: str = "auto",
+        load_denoiser: bool = True,
+    ) -> None:
         self.device = resolve_runtime_device(device, "cuda")
         logger.info(f"Running VoxCPM on device: {self.device}")
         self.optimize = self.device.startswith("cuda")
+        # The ZipEnhancer denoiser is a ModelScope model only needed to clean a
+        # reference audio clip. For narration (Voice Design, no reference audio)
+        # it is never used — disable it with --no-denoiser to skip a slow/blocking
+        # ModelScope download and start much faster (useful on CPU-only machines).
+        self.load_denoiser = load_denoiser
 
         self.asr_model_id = "iic/SenseVoiceSmall"
         self.asr_device = "cuda:0" if self.device.startswith("cuda") else "cpu"
@@ -244,11 +470,12 @@ class VoxCPMDemo:
     def get_or_load_voxcpm(self) -> voxcpm.VoxCPM:
         if self.voxcpm_model is not None:
             return self.voxcpm_model
-        logger.info(f"Loading model: {self._model_id}")
+        logger.info(f"Loading model: {self._model_id} (denoiser={'on' if self.load_denoiser else 'off'})")
         self.voxcpm_model = voxcpm.VoxCPM.from_pretrained(
             self._model_id,
             optimize=self.optimize,
             device=self.device,
+            load_denoiser=self.load_denoiser,
         )
         logger.info("Model loaded successfully.")
         return self.voxcpm_model
@@ -377,6 +604,32 @@ def create_demo_interface(demo: VoxCPMDemo):
     def _on_random_seed_toggle(checked):
         return gr.update(interactive=not checked)
 
+    def _on_preset_change(preset_name):
+        """Fill the Voice Design fields from a preset. 'Personnalisé' = no-op."""
+        preset = _PRESET_BY_NAME.get(preset_name)
+        if preset is None:  # "Personnalisé / manuel" → keep fields as-is (current behavior)
+            return (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+        return (
+            gr.update(value=preset["description"]),             # control_instruction
+            gr.update(value=preset["seed"], interactive=True),  # seed_value (editable)
+            gr.update(value=False),                             # random_seed → unchecked
+            gr.update(value=preset["cfg"]),                     # cfg_value
+            gr.update(value=preset["diffusion_steps"]),         # dit_steps
+            gr.update(value=preset["normalize"]),               # DoNormalizeText
+        )
+
+    def _load_text_file(file_path: Optional[str]) -> str:
+        """Read a .txt file and return its contents to fill the target text box."""
+        if not file_path:
+            return gr.update()
+        try:
+            content = Path(file_path).read_text(encoding="utf-8").strip()
+            logger.info(f"Loaded text file ({len(content)} chars) from {file_path}")
+            return content
+        except Exception as e:
+            logger.warning(f"Could not read text file {file_path}: {e}")
+            raise gr.Error(f"Impossible de lire le fichier : {e}")
+
     def _generate(
         text: str,
         control_instruction: str,
@@ -388,12 +641,14 @@ def create_demo_interface(demo: VoxCPMDemo):
         denoise: bool,
         dit_steps: int,
         seed_value,
+        enable_chunking: bool,
+        progress=gr.Progress(),
     ):
         actual_prompt_text = prompt_text_value.strip() if use_prompt_text else ""
         actual_control = "" if use_prompt_text else control_instruction
         seed = _coerce_seed(seed_value)
-        sr, wav_np, last_successful_seed = demo.generate_tts_audio(
-            text_input=text,
+
+        common = dict(
             control_instruction=actual_control,
             reference_wav_path_input=ref_wav,
             prompt_text=actual_prompt_text,
@@ -401,9 +656,52 @@ def create_demo_interface(demo: VoxCPMDemo):
             do_normalize=do_normalize,
             denoise=denoise,
             inference_timesteps=int(dit_steps),
+            seed=seed,  # same seed for every chunk → consistent voice
+        )
+
+        # Only chunk plain Voice Design / control text — cloning modes keep a single pass.
+        chunks = _split_text_into_chunks(text) if enable_chunking else []
+        if len(chunks) <= 1 or ref_wav or actual_prompt_text:
+            sr, wav_np, last_successful_seed = demo.generate_tts_audio(text_input=text, **common)
+            return (sr, wav_np), last_successful_seed
+
+        logger.info(f"Chunked synthesis: {len(chunks)} segments.")
+        sr = None
+        parts: List[np.ndarray] = []
+        last_successful_seed = seed
+        for i, chunk in enumerate(progress.tqdm(chunks, desc="Synthèse des segments")):
+            logger.info(f"  segment {i + 1}/{len(chunks)}")
+            sr, wav_chunk, last_successful_seed = demo.generate_tts_audio(text_input=chunk, **common)
+            if i > 0:
+                parts.append(np.zeros(int(sr * _CHUNK_SILENCE_SEC), dtype=wav_chunk.dtype))
+            parts.append(wav_chunk)
+        return (sr, np.concatenate(parts)), last_successful_seed
+
+    def _preview_voice(description, seed_value, cfg, steps, normalize):
+        """Generate (and cache) a short sample of the currently selected voice."""
+        seed = _coerce_seed(seed_value)
+        cache_path = None
+        if seed is not None:
+            _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+            cache_path = _PREVIEW_DIR / f"preview_{seed}.wav"
+            if cache_path.is_file():
+                return str(cache_path)
+        sr, wav_np, _ = demo.generate_tts_audio(
+            text_input=_PREVIEW_TEXT,
+            control_instruction=description or "",
+            cfg_value_input=cfg,
+            do_normalize=normalize,
+            inference_timesteps=int(steps),
             seed=seed,
         )
-        return (sr, wav_np), last_successful_seed
+        if cache_path is not None:
+            try:
+                import soundfile as sf
+                sf.write(str(cache_path), wav_np, sr)
+                return str(cache_path)
+            except Exception as e:
+                logger.warning(f"Could not cache preview ({e}); returning in-memory audio.")
+        return (sr, wav_np)
 
     def _on_toggle_instant(checked):
         """Instant UI toggle — no ASR, no blocking."""
@@ -459,6 +757,14 @@ def create_demo_interface(demo: VoxCPMDemo):
                     lines=2,
                     visible=False,
                 )
+                preset_voice = gr.Dropdown(
+                    choices=[PRESET_CUSTOM_LABEL] + [v["name"] for v in PRESET_VOICES],
+                    value=PRESET_CUSTOM_LABEL,
+                    label=I18N("preset_voices_label"),
+                    info=I18N("preset_voices_info"),
+                )
+                preview_btn = gr.Button(I18N("preview_btn_label"), size="sm")
+                preview_audio = gr.Audio(label=I18N("preview_btn_label"), visible=False)
                 control_instruction = gr.Textbox(
                     value="",
                     label=I18N("control_label"),
@@ -469,6 +775,11 @@ def create_demo_interface(demo: VoxCPMDemo):
                     value=DEFAULT_TARGET_TEXT,
                     label=I18N("target_text_label"),
                     lines=3,
+                )
+                load_txt_btn = gr.UploadButton(
+                    I18N("load_txt_label"),
+                    file_types=[".txt"],
+                    size="sm",
                 )
 
                 with gr.Accordion(I18N("advanced_settings_title"), open=False):
@@ -483,6 +794,12 @@ def create_demo_interface(demo: VoxCPMDemo):
                         label=I18N("normalize_label"),
                         elem_classes=["switch-toggle"],
                         info=I18N("normalize_info"),
+                    )
+                    enable_chunking = gr.Checkbox(
+                        value=True,
+                        label=I18N("chunking_label"),
+                        elem_classes=["switch-toggle"],
+                        info=I18N("chunking_info"),
                     )
                     cfg_value = gr.Slider(
                         minimum=1.0,
@@ -537,6 +854,36 @@ def create_demo_interface(demo: VoxCPMDemo):
             outputs=[seed_value],
         )
 
+        preset_voice.change(
+            fn=_on_preset_change,
+            inputs=[preset_voice],
+            outputs=[
+                control_instruction,
+                seed_value,
+                random_seed,
+                cfg_value,
+                dit_steps,
+                DoNormalizeText,
+            ],
+        )
+
+        load_txt_btn.upload(
+            fn=_load_text_file,
+            inputs=[load_txt_btn],
+            outputs=[text],
+        )
+
+        preview_btn.click(
+            fn=lambda: gr.update(visible=True),
+            outputs=[preview_audio],
+            show_progress=False,
+        ).then(
+            fn=_preview_voice,
+            inputs=[control_instruction, seed_value, cfg_value, dit_steps, DoNormalizeText],
+            outputs=[preview_audio],
+            show_progress=True,
+        )
+
         run_btn.click(
             fn=_prepare_seed,
             inputs=[random_seed, seed_value],
@@ -555,6 +902,7 @@ def create_demo_interface(demo: VoxCPMDemo):
                 DoDenoisePromptAudio,
                 dit_steps,
                 seed_value,
+                enable_chunking,
             ],
             outputs=[audio_output, seed_value],
             show_progress=True,
@@ -570,8 +918,9 @@ def run_demo(
     show_error: bool = True,
     model_id: str = "openbmb/VoxCPM2",
     device: str = "auto",
+    load_denoiser: bool = True,
 ):
-    demo = VoxCPMDemo(model_id=model_id, device=device)
+    demo = VoxCPMDemo(model_id=model_id, device=device, load_denoiser=load_denoiser)
     interface = create_demo_interface(demo)
     interface.queue(max_size=10, default_concurrency_limit=1).launch(
         server_name=server_name,
@@ -607,10 +956,18 @@ if __name__ == "__main__":
         default="auto",
         help="Runtime device: auto, cpu, mps, cuda, or cuda:N (default: auto)",
     )
+    parser.add_argument(
+        "--no-denoiser",
+        action="store_true",
+        help="Skip loading the ZipEnhancer (ModelScope) denoiser. It is only used to "
+             "clean reference audio for cloning; disabling it speeds up startup and "
+             "avoids a slow/blocking download — recommended for narration on CPU.",
+    )
     args = parser.parse_args()
     run_demo(
         model_id=args.model_id,
         server_name=args.host,
         server_port=args.port,
         device=args.device,
+        load_denoiser=not args.no_denoiser,
     )
