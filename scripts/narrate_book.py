@@ -35,7 +35,9 @@ Examples
 """
 import argparse
 import re
+import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -86,6 +88,10 @@ def main() -> int:
     parser.add_argument("--chapter-regex", help="Regex (MULTILINE) that separates chapters (default: '^---$')")
     parser.add_argument("--force", action="store_true", help="Regenerate chapters even if their .wav exists")
     parser.add_argument("--dry-run", action="store_true", help="Show the segmentation plan, generate nothing")
+    parser.add_argument("--continuity", action="store_true",
+                        help="EXPERIMENTAL: chain each chunk from the previous one (prompt-cache "
+                             "continuation) for smoother joins, instead of same-seed only. Slower; "
+                             "resets at each chapter boundary. Tune on a GPU (slow to iterate on CPU).")
     args = parser.parse_args()
 
     if not args.voice and not args.description:
@@ -132,22 +138,52 @@ def main() -> int:
         print(f"[chapter {i:03d}/{len(plan)}] {len(chunks)} chunk(s) ...", flush=True)
         parts: list[np.ndarray] = []
         sr = None
-        for j, chunk in enumerate(chunks):
-            sr, wav, _ = demo.generate_tts_audio(
-                text_input=chunk,
-                control_instruction=description,
-                cfg_value_input=args.cfg,
-                do_normalize=normalize,
-                inference_timesteps=args.steps,
-                seed=seed,
-            )
-            if j > 0:
-                parts.append(np.zeros(int(sr * args.silence), dtype=wav.dtype))
-            parts.append(wav)
-            print(f"    chunk {j + 1}/{len(chunks)} done", flush=True)
-        sf.write(str(out), np.concatenate(parts), sr)
-        dur = len(np.concatenate(parts)) / sr
-        print(f"[chapter {i:03d}/{len(plan)}] saved -> {out.name} ({dur:.1f}s)", flush=True)
+        # Continuity: chain each chunk from the immediately previous one only
+        # (bounded window → never overflows the KV cache). Reset per chapter.
+        prev_wav_path: str | None = None
+        prev_text: str | None = None
+        tmp_paths: list[str] = []
+        try:
+            for j, chunk in enumerate(chunks):
+                if args.continuity and prev_wav_path is not None:
+                    # Voice comes from the running audio, so drop the control text.
+                    sr, wav, _ = demo.generate_tts_audio(
+                        text_input=chunk,
+                        control_instruction="",
+                        reference_wav_path_input=prev_wav_path,
+                        prompt_text=prev_text,
+                        cfg_value_input=args.cfg,
+                        do_normalize=normalize,
+                        inference_timesteps=args.steps,
+                        seed=seed,
+                    )
+                else:
+                    sr, wav, _ = demo.generate_tts_audio(
+                        text_input=chunk,
+                        control_instruction=description,
+                        cfg_value_input=args.cfg,
+                        do_normalize=normalize,
+                        inference_timesteps=args.steps,
+                        seed=seed,
+                    )
+                if j > 0:
+                    parts.append(np.zeros(int(sr * args.silence), dtype=wav.dtype))
+                parts.append(wav)
+                if args.continuity:  # stash this chunk as the prompt for the next one
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                        tmp_paths.append(tmp.name)
+                    sf.write(tmp_paths[-1], wav, sr)
+                    prev_wav_path, prev_text = tmp_paths[-1], chunk
+                print(f"    chunk {j + 1}/{len(chunks)} done", flush=True)
+        finally:
+            for p in tmp_paths:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+        book = np.concatenate(parts)
+        sf.write(str(out), book, sr)
+        print(f"[chapter {i:03d}/{len(plan)}] saved -> {out.name} ({len(book) / sr:.1f}s)", flush=True)
 
     print(f"\nDone. Chapter files are in: {outdir}", flush=True)
     print("Tip: concatenate them into one file with your audio tool, e.g. ffmpeg concat.", flush=True)
