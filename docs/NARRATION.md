@@ -22,7 +22,7 @@ podcast, etc.
 |---|---|---|---|
 | RTX 4090 (CUDA) | ~0.30 (≈3× plus rapide que le réel) | ~3 min | **< 1 h** |
 | Apple M4 Pro (Metal) | ~1.76 | ~18 min | ~5 h |
-| **CPU seul (cette machine)** | **~50** (50× plus lent) | **~8 h** | **plusieurs jours** |
+| **CPU seul (float32, cette machine)** | **~41** (41× plus lent) | **~7 h** | **plusieurs jours** |
 
 > RTF = *Real-Time Factor* : temps de calcul ÷ durée audio produite. Plus c'est bas, mieux c'est.
 
@@ -35,13 +35,15 @@ podcast, etc.
    ```
    Le modèle demande ~8 Go de VRAM.
 
-### Astuce vitesse CPU (à tester)
+### Vitesse CPU : float32 par défaut (~1,5× plus rapide)
 
-Sur CPU, le modèle tourne actuellement en **bfloat16 émulé**, ce qui est lent
-(`pick_runtime_dtype` dans `src/voxcpm/model/utils.py` ne force `float32` que sur MPS,
-pas sur CPU). Forcer `float32` sur CPU utiliserait plus de RAM mais serait probablement
-plus rapide. C'est une piste d'optimisation non encore intégrée — demande-la si tu veux
-qu'on la teste/mesure.
+Sur CPU, le `bfloat16` du checkpoint est **émulé** et lent. Ce fork force donc
+`float32` sur CPU (voir `pick_runtime_dtype` dans `src/voxcpm/model/utils.py`), ce qui
+est **~1,5× plus rapide** (mesuré : RTF 60,9 → 41,1 sur la même phrase, soit −33 % de
+temps) au prix d'un peu plus de RAM.
+
+Pour revenir à l'ancien comportement bfloat16 : `set VOXCPM_CPU_DTYPE=bfloat16` avant de
+lancer l'app (ou export sous bash).
 
 ## Deux façons de narrer
 
