@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import json
+import time
 import logging
 import random
 import numpy as np
@@ -358,6 +359,28 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…。！？\n])\s+")
 _PREVIEW_TEXT = "Bonjour, ceci est un aperçu de cette voix pour la narration de votre livre audio."
 _PREVIEW_DIR = Path(__file__).parent / "assets" / "voice_previews"
 
+# Every generation is also archived here with a descriptive filename.
+_OUTPUT_DIR = Path(__file__).parent / "output"
+
+
+def _sanitize_filename(name: str) -> str:
+    """Turn a voice name into a safe filename fragment."""
+    name = re.sub(r"[^\w]+", "_", (name or "").strip(), flags=re.UNICODE)
+    return name.strip("_")[:60] or "custom"
+
+
+def _save_output_wav(wav_np: np.ndarray, sr: int, seed: Optional[int], voice_name: str) -> str:
+    """Write the generated audio to output/ with a descriptive name; return the path."""
+    import soundfile as sf
+
+    _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    seed_part = f"seed{seed}" if seed is not None else "seedrandom"
+    out = _OUTPUT_DIR / f"narration_{_sanitize_filename(voice_name)}_{seed_part}_{stamp}.wav"
+    sf.write(str(out), wav_np, sr)
+    logger.info(f"Saved generated audio -> {out}")
+    return str(out)
+
 
 def _split_text_into_chunks(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> List[str]:
     """Greedily pack whole sentences into chunks no longer than ``max_chars``.
@@ -642,11 +665,13 @@ def create_demo_interface(demo: VoxCPMDemo):
         dit_steps: int,
         seed_value,
         enable_chunking: bool,
+        preset_name: str = "",
         progress=gr.Progress(),
     ):
         actual_prompt_text = prompt_text_value.strip() if use_prompt_text else ""
         actual_control = "" if use_prompt_text else control_instruction
         seed = _coerce_seed(seed_value)
+        voice_name = preset_name if preset_name and preset_name != PRESET_CUSTOM_LABEL else "custom"
 
         common = dict(
             control_instruction=actual_control,
@@ -663,19 +688,21 @@ def create_demo_interface(demo: VoxCPMDemo):
         chunks = _split_text_into_chunks(text) if enable_chunking else []
         if len(chunks) <= 1 or ref_wav or actual_prompt_text:
             sr, wav_np, last_successful_seed = demo.generate_tts_audio(text_input=text, **common)
-            return (sr, wav_np), last_successful_seed
+        else:
+            logger.info(f"Chunked synthesis: {len(chunks)} segments.")
+            sr = None
+            parts: List[np.ndarray] = []
+            last_successful_seed = seed
+            for i, chunk in enumerate(progress.tqdm(chunks, desc="Synthèse des segments")):
+                logger.info(f"  segment {i + 1}/{len(chunks)}")
+                sr, wav_chunk, last_successful_seed = demo.generate_tts_audio(text_input=chunk, **common)
+                if i > 0:
+                    parts.append(np.zeros(int(sr * _CHUNK_SILENCE_SEC), dtype=wav_chunk.dtype))
+                parts.append(wav_chunk)
+            wav_np = np.concatenate(parts)
 
-        logger.info(f"Chunked synthesis: {len(chunks)} segments.")
-        sr = None
-        parts: List[np.ndarray] = []
-        last_successful_seed = seed
-        for i, chunk in enumerate(progress.tqdm(chunks, desc="Synthèse des segments")):
-            logger.info(f"  segment {i + 1}/{len(chunks)}")
-            sr, wav_chunk, last_successful_seed = demo.generate_tts_audio(text_input=chunk, **common)
-            if i > 0:
-                parts.append(np.zeros(int(sr * _CHUNK_SILENCE_SEC), dtype=wav_chunk.dtype))
-            parts.append(wav_chunk)
-        return (sr, np.concatenate(parts)), last_successful_seed
+        out_path = _save_output_wav(wav_np, sr, last_successful_seed, voice_name)
+        return out_path, last_successful_seed
 
     def _preview_voice(description, seed_value, cfg, steps, normalize):
         """Generate (and cache) a short sample of the currently selected voice."""
@@ -903,6 +930,7 @@ def create_demo_interface(demo: VoxCPMDemo):
                 dit_steps,
                 seed_value,
                 enable_chunking,
+                preset_voice,
             ],
             outputs=[audio_output, seed_value],
             show_progress=True,
