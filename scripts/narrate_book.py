@@ -41,6 +41,7 @@ Examples
   ./.venv/Scripts/python.exe scripts/narrate_book.py livre.txt --voice "..." --device cuda
 """
 import argparse
+import json
 import os
 import sys
 import tempfile
@@ -57,7 +58,7 @@ import app  # noqa: E402
 from narration import assemble as assembly  # noqa: E402
 from narration import audio as audio_tools  # noqa: E402
 from narration import cache as cache_tools  # noqa: E402
-from narration import chunking, text_fr  # noqa: E402
+from narration import chunking, quality, text_fr  # noqa: E402
 
 #: Rough characters-per-second of finished narration, used only to estimate how
 #: long a book will run before committing hours of CPU to it.
@@ -137,6 +138,15 @@ def build_parser() -> argparse.ArgumentParser:
                      help="EXPERIMENTAL: chain each segment from the previous one (prompt-cache "
                           "continuation) for smoother joins, instead of same-seed only. Slower; "
                           "resets at each chapter boundary. Tune on a GPU (slow to iterate on CPU).")
+
+    qc = parser.add_argument_group("contrôle qualité")
+    qc.add_argument("--no-qc", action="store_true",
+                    help="Do not inspect generated segments for defects")
+    qc.add_argument("--qc-retries", type=int, default=1, metavar="N",
+                    help="Re-roll a fatally defective segment up to N times with a derived "
+                         "seed (default: 1; 0 to report defects without regenerating)")
+    qc.add_argument("--qc-strict", action="store_true",
+                    help="Exit non-zero if any segment is still defective at the end")
     return parser
 
 
@@ -212,6 +222,10 @@ def main() -> int:
     cache = cache_tools.ChunkCache(outdir / ".cache", enabled=not args.no_cache)
     mastering = audio_tools.MasteringSettings(target_rms_db=args.target_rms)
 
+    qc = not args.no_qc
+    thresholds = quality.QualityThresholds()
+    qc_reports: list[tuple[str, quality.SegmentReport]] = []
+
     demo = app.VoxCPMDemo(model_id=args.model_id, device=args.device, load_denoiser=False)
     print(f"\nDébut de la narration à {time.strftime('%H:%M:%S')} (device={args.device}). "
           f"C'est lent sur CPU.\n", flush=True)
@@ -234,36 +248,67 @@ def main() -> int:
         try:
             for position, segment in enumerate(segments):
                 key = cache.key(segment.text, voice_spec, parent=previous_key if args.continuity else None)
+                label = f"ch{index:03d}/seg{position + 1:03d}"
+
+                def render(current_seed, _segment=segment):
+                    """One generation of this segment at a given seed."""
+                    if args.continuity and previous_wav_path is not None:
+                        # The voice now comes from the running audio, so the
+                        # control text is dropped.
+                        sr, wav_out, _ = demo.generate_tts_audio(
+                            text_input=_segment.text,
+                            control_instruction="",
+                            reference_wav_path_input=previous_wav_path,
+                            prompt_text=previous_text,
+                            cfg_value_input=args.cfg,
+                            do_normalize=not args.no_normalize,
+                            inference_timesteps=args.steps,
+                            seed=current_seed,
+                        )
+                    else:
+                        sr, wav_out, _ = demo.generate_tts_audio(
+                            text_input=_segment.text,
+                            control_instruction=description,
+                            cfg_value_input=args.cfg,
+                            do_normalize=not args.no_normalize,
+                            inference_timesteps=args.steps,
+                            seed=current_seed,
+                        )
+                    return sr, wav_out
+
                 cached = cache.get(key)
                 if cached is not None:
                     sample_rate, wav = cached
                     status = "cache"
-                elif args.continuity and previous_wav_path is not None:
-                    # The voice now comes from the running audio, so the control
-                    # text is dropped.
-                    sample_rate, wav, _ = demo.generate_tts_audio(
-                        text_input=segment.text,
-                        control_instruction="",
-                        reference_wav_path_input=previous_wav_path,
-                        prompt_text=previous_text,
-                        cfg_value_input=args.cfg,
-                        do_normalize=not args.no_normalize,
-                        inference_timesteps=args.steps,
-                        seed=seed,
+                    # Inspected too: a segment cached by a run that predates the
+                    # quality pass, or one that was kept as the least-bad
+                    # attempt, should still be reported rather than pass silently.
+                    report = quality.inspect_segment(wav, sample_rate, segment.text, thresholds) if qc else None
+                elif qc:
+                    result = quality.render_checked(
+                        segment.text,
+                        render,
+                        base_seed=seed,
+                        max_attempts=max(1, args.qc_retries + 1),
+                        thresholds=thresholds,
                     )
+                    sample_rate, wav, report = result.sample_rate, result.wav, result.report
                     cache.put(key, sample_rate, wav, text=segment.text)
-                    status = "généré"
+                    if result.attempts == 1:
+                        status = "généré"
+                    elif result.unrepairable:
+                        status = f"généré, DÉFECTUEUX après {result.attempts} essais"
+                    else:
+                        status = f"régénéré ({result.attempts} essais)"
                 else:
-                    sample_rate, wav, _ = demo.generate_tts_audio(
-                        text_input=segment.text,
-                        control_instruction=description,
-                        cfg_value_input=args.cfg,
-                        do_normalize=not args.no_normalize,
-                        inference_timesteps=args.steps,
-                        seed=seed,
-                    )
+                    sample_rate, wav = render(seed)
                     cache.put(key, sample_rate, wav, text=segment.text)
-                    status = "généré"
+                    status, report = "généré", None
+
+                if report is not None:
+                    qc_reports.append((label, report))
+                    if not report.ok:
+                        status += f" — {report.describe()}"
 
                 rendered.append((wav, segment.pause_after))
                 previous_key = key
@@ -303,12 +348,32 @@ def main() -> int:
     print(f"\nTerminé. Chapitres dans : {outdir}")
     print(cache.stats.describe())
 
+    # ---- quality report -------------------------------------------------
+    defective = 0
+    if qc_reports:
+        summary = quality.summarize(qc_reports)
+        defective = summary["fatal"]
+        report_path = outdir / "qc_report.json"
+        report_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        if summary["flagged"]:
+            codes = ", ".join(f"{code}×{count}" for code, count in sorted(summary["by_code"].items()))
+            print(
+                f"Contrôle qualité : {summary['flagged']}/{summary['segments']} segment(s) signalé(s) "
+                f"({codes}) — détail dans {report_path.name}"
+            )
+            for detail in summary["details"][:10]:
+                print(f"  {detail['segment']}: {', '.join(i['code'] for i in detail['issues'])}")
+            if len(summary["details"]) > 10:
+                print(f"  … et {len(summary['details']) - 10} autre(s), voir {report_path.name}")
+        else:
+            print(f"Contrôle qualité : {summary['segments']}/{summary['segments']} segment(s) sains")
+
     # ---- assemble ------------------------------------------------------
     if args.assemble:
         chapter_files = sorted(p for p in outdir.glob("chapitre_*.wav"))
         if not chapter_files:
             print("Rien à assembler.")
-            return 0
+            return 1 if (args.qc_strict and defective) else 0
         target = outdir / f"{outdir.name}_complet.{args.assemble}"
         print(f"\nAssemblage de {len(chapter_files)} chapitre(s) -> {target.name}")
         result = assembly.assemble(
@@ -328,6 +393,10 @@ def main() -> int:
     else:
         print("Astuce : ajoutez --assemble m4b pour produire un fichier unique avec chapitres, "
               "ou lancez scripts/assemble_audiobook.py plus tard.")
+
+    if args.qc_strict and defective:
+        print(f"--qc-strict : {defective} segment(s) toujours défectueux.")
+        return 1
     return 0
 
 
