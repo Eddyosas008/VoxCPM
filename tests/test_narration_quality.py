@@ -75,13 +75,16 @@ def test_slow_and_fast_reading_are_both_accepted():
         assert not report.fatal, f"{characters} chars / {seconds}s: {report.describe()}"
 
 
-@pytest.mark.parametrize("rate", [15.8, 18.8, 21.1, 24.1])
+@pytest.mark.parametrize("rate", [15.8, 17.5, 18.8, 19.5, 20.2, 21.1, 23.0, 24.1])
 def test_rates_measured_from_the_preset_voices_are_never_flagged(rate):
     """Guards the thresholds against drifting into the engine's real range.
 
-    These are the rates the seven preset voices actually produced on the same
+    Every distinct rate the fourteen preset voices produced on the same
     sentence. A change that makes any of them look defective would flag a large
     share of a real book, so it is caught here rather than four hours in.
+
+    The range was unchanged when the set grew from seven voices to fourteen —
+    15.8 to 24.1 both times — which is what makes it worth pinning.
     """
     seconds = 8.0
     report = quality.inspect_segment(

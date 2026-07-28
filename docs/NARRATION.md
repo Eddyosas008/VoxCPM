@@ -203,11 +203,15 @@ avec sa durée, son débit et ses défauts. `--no-qc` désactive tout.
 
 **Sur les seuils de débit.** Ce sont eux qui portent la détection de troncature, et
 ils viennent de la mesure, pas d'une estimation : sur la même phrase de 81
-caractères, les sept voix préréglées produisent entre **15,8 et 24,1 caractères par
-seconde**, soit plus de 50 % d'écart entre la plus lente et la plus rapide. Les
-bornes (35 et 6 car/s) sont donc placées largement en dehors de cette plage — choisir
-une voix rapide ne doit jamais ressembler à un défaut — tout en restant franchies par
-une troncature qui perdrait la moitié d'une phrase. Un test verrouille ces valeurs
+caractères, les quatorze voix préréglées produisent entre **15,8 et 24,1 caractères
+par seconde** (médiane 20,2), soit plus de 50 % d'écart entre la plus lente et la plus
+rapide. Les bornes (35 et 6 car/s) sont donc placées largement en dehors de cette
+plage — choisir une voix rapide ne doit jamais ressembler à un défaut — tout en
+restant franchies par une troncature qui perdrait la moitié d'une phrase.
+
+Cette plage n'a **pas bougé** quand le jeu de voix est passé de sept à quatorze :
+mêmes 15,8 et 24,1 aux deux extrémités. C'est ce qui lui donne du crédit — doubler
+l'échantillon n'a déplacé aucune borne. Un test verrouille chacune des valeurs
 mesurées, pour qu'un réglage ultérieur ne puisse pas les faire dériver sans alerte.
 
 ## Assemblage en un fichier unique

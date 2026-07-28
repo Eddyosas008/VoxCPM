@@ -69,17 +69,21 @@ class QualityThresholds:
     """Where each defect starts.
 
     The speech-rate limits are the load-bearing ones, and they are set from
-    measurement rather than from the nominal figure. The engine's own preset
-    voices, given the same 81-character sentence, come back between 15.8 and
-    24.1 characters per second — a spread of more than 50% between the slowest
-    and the fastest voice. The bounds therefore sit well outside that range, so
-    that choosing a brisk voice is never mistaken for a defect; a truncation
-    that drops half of a sentence still doubles the rate and lands outside them.
+    measurement rather than from the nominal figure. The fourteen preset voices,
+    given the same 81-character sentence, come back between 15.8 and 24.1
+    characters per second, median 20.2 — a spread of more than 50% between the
+    slowest and the fastest voice. The bounds therefore sit well outside that
+    range, so that choosing a brisk voice is never mistaken for a defect; a
+    truncation that drops half of a sentence still doubles the rate and lands
+    outside them.
+
+    The range held exactly when the voice set grew from seven to fourteen, which
+    is the reason to trust it: doubling the sample moved neither end.
     """
 
-    #: Middle of the range measured across the preset voices. Explains a report,
-    #: and breaks ties between attempts; never judges one on its own.
-    expected_chars_per_second: float = 17.0
+    #: Median measured across the preset voices. Explains a report, and breaks
+    #: ties between attempts; never judges one on its own.
+    expected_chars_per_second: float = 20.0
     #: Above this, the text cannot have been spoken in the audio returned.
     truncated_chars_per_second: float = 35.0
     #: Below this, there is far more audio than the text can account for.
@@ -128,7 +132,7 @@ class SegmentReport:
     issues: Tuple[Issue, ...] = ()
     #: Rate the segment was judged against, carried so :attr:`penalty` can rank
     #: attempts without needing the thresholds that produced the report.
-    expected_chars_per_second: float = 17.0
+    expected_chars_per_second: float = 20.0
 
     @property
     def ok(self) -> bool:
