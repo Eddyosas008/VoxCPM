@@ -9,12 +9,28 @@ podcast, etc.
 **Oui, c'est fait pour ça** — mais deux réalités comptent :
 
 1. **La vitesse dépend du matériel.** Sur **GPU CUDA**, c'est rapide et pratique. Sur
-   **CPU seul**, c'est ~50× plus lent que le temps réel : utilisable pour des extraits
-   courts, impraticable pour un livre entier.
+   **CPU seul**, c'est ~40× plus lent que le temps réel : utilisable pour des extraits
+   courts, très long pour un livre entier.
 2. **Le découpage est automatique et obligatoire.** Le moteur ne peut pas traiter plus
    de ~8 192 tokens d'un coup — au-delà il s'arrête sur une erreur « KV cache is full »
    (voir `src/voxcpm/model/voxcpm2.py`). L'app et le script découpent le texte en
    phrases pour rester bien en-dessous de cette limite, sans que tu aies à t'en soucier.
+
+## La chaîne de production
+
+Le texte brut ne devient pas un livre audio en une étape. Cinq étapes s'enchaînent,
+chacune dans un module de `narration/` — testable et utilisable indépendamment :
+
+| Étape | Module | Ce qu'elle fait |
+|---|---|---|
+| **1. Préparation** | `narration/text_fr.py` | Réécrit le texte tel qu'un narrateur le dirait : `1789` → « mille sept cent quatre-vingt-neuf », `M. Dupont` → « Monsieur Dupont », `XIVe siècle` → « quatorzième siècle », `14h30`, `1 250 €`, `3,5 %`… |
+| **2. Découpage** | `narration/chunking.py` | Coupe en segments sous la limite du moteur, **sans jamais couper une phrase**, et décide la durée du silence après chaque segment selon la ponctuation |
+| **3. Synthèse** | moteur VoxCPM2 | Même seed partout → voix identique du début à la fin |
+| **4. Mastering** | `narration/audio.py` | Rogne les silences parasites, supprime les clics aux jointures, insère les pauses, normalise la sonie **une fois par chapitre** |
+| **5. Assemblage** | `narration/assemble.py` | Réunit les chapitres en un seul M4B/MP3 avec marqueurs de chapitres |
+
+Entre les étapes 2 et 3, un **cache par segment** (`narration/cache.py`) rend la
+narration reprenable : voir plus bas.
 
 ## Vitesse : à quoi s'attendre
 
@@ -45,24 +61,24 @@ temps) au prix d'un peu plus de RAM.
 Pour revenir à l'ancien comportement bfloat16 : `set VOXCPM_CPU_DTYPE=bfloat16` avant de
 lancer l'app (ou export sous bash).
 
-## Deux façons de narrer
+## Trois façons de narrer
 
-### 1. Interface web — pour des extraits / chapitre par chapitre
+### 1. Onglet « 📚 Livre audio » — pour un livre depuis l'interface
 
-Idéale pour tester des voix, générer une méditation, un segment de podcast, ou un
-chapitre à la fois.
+1. Choisis d'abord une voix dans l'onglet **🎙️ Studio** (la description et le seed
+   de cette voix sont ceux qui seront utilisés).
+2. Passe sur l'onglet **📚 Livre audio**, charge ton `.txt` ou colle le texte.
+3. Clique **« 🔍 Analyser sans générer »** : tu vois le nombre de chapitres, de
+   segments, la durée estimée, et **le premier segment tel qu'il sera réellement lu**
+   (après préparation du texte). C'est le moment de repérer un nombre ou une
+   abréviation mal interprétés — avant d'engager des heures de calcul.
+4. Clique **« 📖 Narrer le livre »**. Chaque chapitre terminé est écrit sur disque
+   et devient écoutable immédiatement ; l'avancement s'affiche au fur et à mesure.
+5. Clique **« 📦 Assembler le livre audio »** pour obtenir un fichier unique.
 
-- Charge ton texte avec **« 📄 Charger un fichier .txt »** (ou colle-le).
-- Choisis une **voix prédéfinie** (le seed et le style se règlent automatiquement).
-- Laisse **« Découper les longs textes »** activé (règle la taille de segment avec le
-  curseur si besoin, 100–600 caractères).
-- Clique **« Générer la voix »**. Chaque génération est archivée dans `output/` sous un
-  nom explicite (`narration_<voix>_seed<seed>_<horodatage>.wav`).
+### 2. Script `narrate_book.py` — pour un livre entier en ligne de commande
 
-### 2. Script `narrate_book.py` — pour un livre / long script entier
-
-Robuste pour les longs contenus : **sauvegarde par chapitre**, **reprise après
-interruption**, **économe en mémoire** (un seul chapitre en RAM à la fois).
+Le plus robuste pour les longs contenus.
 
 Sépare les chapitres de ton `.txt` par une ligne contenant seulement `---` :
 
@@ -76,21 +92,114 @@ Chapitre deuxième. ...
 
 Puis :
 ```
-# Aperçu du découpage, sans rien générer :
+# Aperçu : découpage, durée estimée, et texte préparé — sans rien générer :
 .\.venv\Scripts\python.exe scripts\narrate_book.py livre.txt --voice "Narrateur profond & calme" --dry-run
 
 # Génération (une .wav par chapitre dans output/book_<nom>/) :
 .\.venv\Scripts\python.exe scripts\narrate_book.py livre.txt --voice "Narrateur profond & calme"
 
+# Génération + assemblage direct en M4B avec chapitres :
+.\.venv\Scripts\python.exe scripts\narrate_book.py livre.txt --voice "Narrateur profond & calme" ^
+    --assemble m4b --title "Mon Livre" --author "Edwin"
+
 # Sur GPU :
 .\.venv\Scripts\python.exe scripts\narrate_book.py livre.txt --voice "..." --device cuda
 ```
 
-- **Reprise** : si le script est interrompu, relance la même commande — les chapitres
-  déjà produits sont ignorés (utilise `--force` pour tout régénérer).
-- Options utiles : `--chunk-max-chars`, `--silence`, `--cfg`, `--steps`, `--no-normalize`,
-  `--chapter-regex` (séparateur de chapitres personnalisé), `--description` + `--seed`
-  (voix personnalisée au lieu d'un preset).
+### 3. Onglet « 🎙️ Studio » — pour des extraits
+
+Idéal pour tester des voix, générer une méditation ou un segment de podcast.
+Deux options utiles dans les **Réglages avancés** :
+
+- **Préparation du texte français** — applique l'étape 1 de la chaîne.
+- **Mastering livre audio** — applique l'étape 4 (activé par défaut).
+
+## Reprise après interruption
+
+C'est le point critique sur CPU, où un chapitre prend des heures.
+
+- **Par chapitre** : un chapitre dont le `.wav` existe déjà est ignoré. `--force` le
+  régénère.
+- **Par segment** : chaque segment généré est mis en cache dans
+  `output/book_<nom>/.cache/`, indexé par le **contenu** (texte + description + seed +
+  CFG + étapes + modèle). Si tu relances après une interruption, seuls les segments
+  manquants sont calculés — pas tout le chapitre.
+
+Conséquences pratiques :
+
+- Corriger une coquille dans un paragraphe n'invalide que les segments de ce
+  paragraphe. Le reste du livre est réutilisé tel quel.
+- Changer de voix (ou de seed) invalide tout, ce qui est correct : c'est un autre
+  narrateur.
+- Le cache occupe de la place. `--no-cache` le désactive ; supprimer le dossier
+  `.cache/` est sans risque une fois le livre terminé.
+
+## Qualité audio : la norme ACX
+
+Les plateformes de livres audio vérifient trois choses. Le mastering vise ces valeurs,
+et chaque chapitre est mesuré à l'écriture :
+
+| Mesure | Cible | Pourquoi |
+|---|---|---|
+| RMS (sonie) | entre **-23 et -18 dBFS** (défaut : -20) | volume homogène d'un chapitre à l'autre |
+| Crête | **≤ -3 dBFS** | marge avant saturation |
+| Bruit de fond | **≤ -60 dBFS** | silences réellement silencieux |
+
+Le RMS est mesuré **sur la parole seule** : les silences entre phrases sont exclus du
+calcul. Sans cela, un chapitre aux pauses généreuses mesurerait plusieurs dB trop bas,
+et le corriger pousserait la parole au-dessus du plafond de crête.
+
+Vérifier un livre assemblé :
+```
+.\.venv\Scripts\python.exe scripts\assemble_audiobook.py output\book_mon_livre --check
+```
+
+## Assemblage en un fichier unique
+
+```
+# M4B avec marqueurs de chapitres (nécessite ffmpeg) :
+.\.venv\Scripts\python.exe scripts\assemble_audiobook.py output\book_mon_livre ^
+    --title "Mon Livre" --author "Edwin" --format m4b
+```
+
+**ffmpeg n'est pas installé sur cette machine.** Ce n'est pas bloquant : le script
+produit quand même le WAV complet et le fichier de marqueurs, puis affiche la commande
+exacte à lancer une fois ffmpeg installé. Les heures de synthèse ne sont jamais perdues
+à cause d'un encodeur manquant.
+
+Les titres de chapitres viennent, dans l'ordre : de `--titles`, puis d'un fichier
+`titles.txt` à côté des WAV (écrit automatiquement par `narrate_book.py` à partir de la
+première ligne de chaque chapitre), puis des noms de fichiers.
+
+## Prononciation : lexique personnalisé
+
+`conf/pronunciation_fr.json` associe ce qui est écrit à ce qui doit être prononcé.
+C'est l'outil pour les noms propres d'un roman, les sigles et les mots étrangers :
+
+```json
+{
+  "SNCF": "S N C F",
+  "Nietzsche": "Nitche",
+  "Aurélien Krähenbühl": "Aurélien Krènebul"
+}
+```
+
+Le remplacement est insensible à la casse et ne s'applique qu'à des mots entiers.
+Les clés commençant par `_` sont des commentaires.
+
+## Ce que la préparation du texte corrige (et ses limites)
+
+Sont gérés : nombres cardinaux et ordinaux (`1er`, `2e`, `1re`), décimales, sommes en
+euros/dollars/livres, pourcentages, heures (`14h30`), abréviations (`M.`, `Mme`, `Dr`,
+`Me`, `St`, `etc.`, `av. J.-C.`, `n°`, `p. 42`), chiffres romains, tirets de dialogue,
+guillemets, et le balisage Markdown.
+
+Les chiffres romains ne sont développés que dans des contextes **non ambigus** :
+après un mot déclencheur (`chapitre XIV`, `tome III`), en forme ordinale (`XIXe`), ou
+seuls sur une ligne de titre. C'est délibéré : « Le » est L + e, « Ce » est C + e — les
+développer partout ferait lire « Le manuscrit » comme « cinquantième manuscrit ».
+
+Désactiver globalement : `--no-text-prep` (script) ou décocher la case (interface).
 
 ## Réglages recommandés par usage
 
@@ -98,8 +207,8 @@ Puis :
 |---|---|---|
 | **Livre audio (fiction)** | *Narrateur profond & calme* / *Narratrice douce & naturelle* | défauts (CFG 2.0, 10 étapes) |
 | **Documentaire / non-fiction** | *Narrateur documentaire velouté* / *Narrateur moderne & professionnel* | défauts |
-| **Méditation guidée** | *Méditation guidée (grave & lente)* | augmente `--silence` (ex. 0.6–1.0 s) pour de longues pauses |
-| **Podcast** | *Conteur jeune & dynamique* / *Narratrice chaleureuse & conversationnelle* | défauts |
+| **Méditation guidée** | *Méditation guidée (grave & lente)* | `--pause-sentence 0.8 --pause-paragraph 1.6` |
+| **Podcast** | *Conteur jeune & dynamique* / *Narratrice chaleureuse & conversationnelle* | `--pause-paragraph 0.6` (rythme plus soutenu) |
 
 ## Cohérence de la voix sur un long texte
 
@@ -107,15 +216,15 @@ La voix reste identique d'un segment à l'autre parce que **le même seed est r�
 pour tous les segments** (une paire description + seed régénère exactement la même voix).
 C'est ce qui garantit un narrateur constant sur tout un livre.
 
-> Note : les jointures entre segments sont de simples silences. Pour des transitions
-> encore plus fluides (prosodie enchaînée via *prompt-cache*), une option expérimentale
-> serait possible — demande-la si tu en as besoin.
+L'option expérimentale `--continuity` va plus loin : chaque segment est enchaîné à
+partir du précédent (continuation par *prompt-cache*) pour des jointures encore plus
+fluides. Le mécanisme fonctionne mais il est **beaucoup plus lent** — à régler sur GPU.
 
 ## Limites à connaître
 
 - **Longueur par appel** : ~8 192 tokens max (découpage automatique, donc transparent).
 - **Durée par segment** : le moteur vise ~6× la longueur du texte et s'arrête tout seul ;
   garde des segments de taille raisonnable (défaut 300 caractères).
-- **Sortie** : WAV 48 kHz. Un livre entier concaténé en un seul fichier serait très
-  lourd en mémoire — c'est pourquoi le script écrit **un fichier par chapitre**. Assemble-les
-  ensuite avec ton outil audio (ex. `ffmpeg` concat) si tu veux un seul fichier.
+- **Sortie** : les chapitres sont écrits en WAV 16 bits, un fichier par chapitre. Un
+  livre entier n'est jamais chargé en mémoire — ni à la génération, ni à l'assemblage
+  (qui écrit en flux).

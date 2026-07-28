@@ -10,6 +10,7 @@ les différentes façons d'utiliser l'application.
 - [Installation](#installation)
 - [Interface web (recommandé)](#interface-web-recommandé)
 - [Les trois modes de génération](#les-trois-modes-de-génération)
+- [Livres audio](#livres-audio)
 - [API REST](#api-rest)
 - [Ligne de commande (CLI)](#ligne-de-commande-cli)
 - [API Python](#api-python)
@@ -90,6 +91,31 @@ et le débit. Fonctionne en français, anglais, chinois… Exemples :
 
 - *« Voix masculine grave et posée, ton de narrateur de documentaire »*
 - *« Jeune femme enjouée, débit rapide, ton enthousiaste »*
+
+## Livres audio
+
+Ce fork ajoute une chaîne de production complète pour la narration longue en
+français : préparation du texte (nombres, abréviations, chiffres romains lus
+correctement), découpage avec pauses selon la ponctuation, mastering aux normes
+des plateformes de livres audio, reprise après interruption au segment près, et
+assemblage en M4B/MP3 avec marqueurs de chapitres.
+
+Trois points d'entrée :
+
+```bash
+# Onglet « 📚 Livre audio » de la démo Gradio
+python app.py --port 8808 --no-denoiser
+
+# Narrer un livre entier en ligne de commande
+python scripts/narrate_book.py livre.txt --voice "Narrateur profond & calme" --assemble m4b
+
+# Assembler des chapitres déjà générés
+python scripts/assemble_audiobook.py output/book_mon_livre --title "Mon Livre" --check
+```
+
+**→ Le guide détaillé est dans [docs/NARRATION.md](NARRATION.md)** : vitesse selon le
+matériel, réglages par usage (fiction, documentaire, méditation, podcast), lexique de
+prononciation personnalisé, et normes de sonie.
 
 ## API REST
 
