@@ -2,6 +2,7 @@ import os
 import re
 import sys
 import json
+import dataclasses
 import time
 import logging
 import random
@@ -26,7 +27,7 @@ from voxcpm.model.utils import resolve_runtime_device
 from narration import assemble as assembly
 from narration import audio as audio_tools
 from narration import cache as cache_tools
-from narration import chunking, quality, text_fr
+from narration import chunking, quality, repair, text_fr
 
 logging.basicConfig(
     level=logging.INFO,
@@ -223,6 +224,12 @@ _I18N_TRANSLATIONS = {
         "book_target_rms_info": "Audiobook platforms expect RMS between -23 and -18 dBFS.",
         "book_pause_sentence_label": "Pause after a sentence (s)",
         "book_pause_paragraph_label": "Pause after a paragraph (s)",
+        "book_repair_title": "🔧 Repair a flagged segment",
+        "book_repair_info": "Re-generate a single defective segment and restitch its chapter "
+                            "from the cache. The other segments are never re-synthesized.",
+        "book_scan_btn": "🔍 Scan this book for defects",
+        "book_defect_label": "Segment to repair",
+        "book_repair_btn": "🔧 Re-generate this segment",
         "book_qc_label": "Quality re-rolls per segment",
         "book_qc_info": "A segment that comes back truncated, silent or babbling is generated "
                         "again with a derived seed. 0 only reports the defects.",
@@ -286,6 +293,12 @@ _I18N_TRANSLATIONS = {
         "book_target_rms_info": "Les plateformes de livres audio attendent un RMS entre -23 et -18 dBFS.",
         "book_pause_sentence_label": "Pause après une phrase (s)",
         "book_pause_paragraph_label": "Pause après un paragraphe (s)",
+        "book_repair_title": "🔧 Réparer un segment signalé",
+        "book_repair_info": "Régénère un seul segment défectueux et reconstruit son chapitre "
+                            "à partir du cache. Les autres segments ne sont jamais recalculés.",
+        "book_scan_btn": "🔍 Analyser ce livre",
+        "book_defect_label": "Segment à réparer",
+        "book_repair_btn": "🔧 Régénérer ce segment",
         "book_qc_label": "Réessais qualité par segment",
         "book_qc_info": "Un segment qui revient tronqué, muet ou parti en boucle est régénéré "
                         "avec une graine dérivée. 0 se contente de signaler les défauts.",
@@ -315,6 +328,12 @@ _I18N_TRANSLATIONS = {
         "preset_lang_label": "🌐 语言",
         "preset_voices_label": "🎭 预设旁白语音",
         "preset_voices_info": "选择一个语音以自动填充描述和随机种子。",
+        "book_repair_title": "🔧 Repair a flagged segment",
+        "book_repair_info": "Re-generate a single defective segment and restitch its chapter "
+                            "from the cache. The other segments are never re-synthesized.",
+        "book_scan_btn": "🔍 Scan this book for defects",
+        "book_defect_label": "Segment to repair",
+        "book_repair_btn": "🔧 Re-generate this segment",
         "preview_btn_label": "🔊 试听该语音",
         "chunking_label": "拆分长文本（有声书）",
         "chunking_info": "自动将长文本按句子拆分并拼接音频。",
@@ -901,6 +920,14 @@ def create_demo_interface(demo: VoxCPMDemo):
 
     # ---------- Audiobook tab ----------
 
+    def _chapter_title(chapter: str, index: int) -> str:
+        """First non-empty line of a chapter, used as its marker title."""
+        for line in chapter.splitlines():
+            stripped = line.strip().lstrip("#").strip()
+            if stripped:
+                return stripped[:80]
+        return f"Chapitre {index}"
+
     def _book_dir(title: str) -> Path:
         """Where a book's chapters and its resume cache live."""
         return _BOOKS_DIR / f"book_{_sanitize_filename(title or 'livre')}"
@@ -1001,6 +1028,29 @@ def create_demo_interface(demo: VoxCPMDemo):
         )
         cache = cache_tools.ChunkCache(outdir / ".cache")
 
+        # The plan is what makes a later repair possible: without it the cut
+        # into segments — and so which cache entry holds which sentence — is
+        # lost the moment this run ends. Written before any audio, so an
+        # interrupted narration is still repairable.
+        chapter_plans = [
+            repair.PlannedChapter(
+                index=index,
+                title=_chapter_title(chapter, index),
+                segments=tuple(
+                    repair.PlannedSegment(segment.text, segment.pause_after)
+                    for segment in chunking.split_into_segments(
+                        chapter, int(chunk_max_chars_value), profile
+                    )
+                ),
+            )
+            for index, chapter in enumerate(chapters, 1)
+        ]
+        repair.BookPlan(
+            voice=dataclasses.asdict(voice_spec),
+            mastering=dataclasses.asdict(mastering),
+            chapters=tuple(chapter_plans),
+        ).save(outdir)
+
         voice_label = preset_name if preset_name and preset_name != PRESET_CUSTOM_LABEL else "voix personnalisée"
         lines = [
             f"### Narration en cours\n",
@@ -1011,7 +1061,8 @@ def create_demo_interface(demo: VoxCPMDemo):
         qc_inspected = 0
         yield "\n".join(lines), None
 
-        for index, chapter in enumerate(chapters, 1):
+        for planned in chapter_plans:
+            index = planned.index
             out = outdir / f"chapitre_{index:03d}.wav"
             if out.is_file():
                 lines.append(f"- ⏭️ Chapitre {index}/{len(chapters)} — déjà généré, ignoré")
@@ -1019,7 +1070,9 @@ def create_demo_interface(demo: VoxCPMDemo):
                 yield "\n".join(lines), last_chapter_path
                 continue
 
-            segments = chunking.split_into_segments(chapter, int(chunk_max_chars_value), profile)
+            # The very segments recorded in the plan, so a repair addresses the
+            # same cache entries this run wrote.
+            segments = planned.segments
             if not segments:
                 lines.append(f"- ⚠️ Chapitre {index}/{len(chapters)} — vide, ignoré")
                 yield "\n".join(lines), last_chapter_path
@@ -1094,6 +1147,98 @@ def create_demo_interface(demo: VoxCPMDemo):
             )
         lines.append(f"\nChapitres dans `{outdir}` — utilisez « Assembler » pour un fichier unique.")
         yield "\n".join(lines), last_chapter_path
+
+    def _book_scan_defects(title):
+        """List the segments of a finished book that the quality pass flags."""
+        outdir = _book_dir(title)
+        try:
+            plan = repair.BookPlan.load(outdir)
+        except (FileNotFoundError, ValueError) as error:
+            raise gr.Error(str(error))
+
+        cache = cache_tools.ChunkCache(outdir / ".cache")
+        flagged = repair.flagged_segments(repair.inspect_book(plan, cache))
+        if not flagged:
+            return (
+                gr.update(choices=[], value=None),
+                "**Contrôle qualité :** aucun segment à réparer dans ce livre.",
+                None,
+            )
+
+        choices = [
+            f"{label} — {', '.join(issue.code for issue in report.issues)}"
+            for label, report in flagged
+        ]
+        rows = "\n".join(
+            f"| `{label}` | {'❌ fatal' if report.severity == quality.FATAL else '⚠️ suspect'} "
+            f"| {report.duration_sec:.1f}s | {', '.join(i.detail for i in report.issues)} |"
+            for label, report in flagged
+        )
+        return (
+            gr.update(choices=choices, value=choices[0]),
+            f"**{len(flagged)} segment(s) signalé(s)**\n\n"
+            "| Segment | Gravité | Durée | Détail |\n|---|---|---|---|\n" + rows,
+            None,
+        )
+
+    def _book_repair_segment(title, choice, qc_retries):
+        """Re-roll one flagged segment and restitch only its chapter."""
+        if not choice:
+            raise gr.Error("Choisissez d'abord un segment à réparer.")
+
+        outdir = _book_dir(title)
+        try:
+            plan = repair.BookPlan.load(outdir)
+            chapter_index, position = repair.parse_label(choice.split(" — ")[0])
+        except (FileNotFoundError, ValueError) as error:
+            raise gr.Error(str(error))
+
+        cache = cache_tools.ChunkCache(outdir / ".cache")
+        spec = plan.voice_spec()
+        segment = plan.segment(chapter_index, position)
+
+        def render(seed):
+            sample_rate, wav_out, _ = demo.generate_tts_audio(
+                text_input=segment.text,
+                control_instruction=spec.description,
+                cfg_value_input=spec.cfg,
+                do_normalize=spec.normalize,
+                inference_timesteps=int(spec.steps),
+                seed=seed,
+            )
+            return sample_rate, wav_out
+
+        gr.Info(f"Régénération de {choice.split(' — ')[0]} — une seule génération, pas le chapitre.")
+        result = repair.reroll_segment(plan, chapter_index, position, cache, render)
+
+        lines = [
+            f"### Réparation de `{result.label}` (essai {result.attempt}, graine `{result.seed}`)\n",
+            f"- Texte : « {segment.text[:120]}{'…' if len(segment.text) > 120 else ''} »",
+            f"- Avant : {result.previous.describe() if result.previous else '(rien en cache)'}",
+            f"- Après : {result.report.describe()}",
+        ]
+        if not result.improved:
+            # Kept the old take on purpose; say so, or the user would think the
+            # repair silently did nothing.
+            lines.append(
+                "\n**Le nouvel essai est moins bon : l'ancien est conservé.** "
+                "Relancez pour tirer une autre version."
+            )
+            return "\n".join(lines), None
+
+        rebuilt = repair.rebuild_chapter(plan, chapter_index, cache, outdir)
+        if not rebuilt.ok:
+            lines.append(
+                f"\n⚠️ Chapitre non reconstruit : segment(s) absent(s) du cache — "
+                f"{', '.join(rebuilt.missing)}. Relancez la narration pour les régénérer."
+            )
+            return "\n".join(lines), None
+
+        lines.append(
+            f"\n✅ Chapitre {chapter_index} reconstruit à partir du cache "
+            f"({rebuilt.duration_sec / 60:.1f} min) → `{rebuilt.path.name}`"
+        )
+        return "\n".join(lines), str(rebuilt.path)
 
     def _book_assemble(title, author, output_format):
         """Join the generated chapters into one chaptered file."""
@@ -1383,6 +1528,18 @@ def create_demo_interface(demo: VoxCPMDemo):
                                 scale=1,
                             )
                             book_assemble_btn = gr.Button(I18N("book_assemble_btn"), scale=2)
+
+                        with gr.Accordion(I18N("book_repair_title"), open=False):
+                            gr.Markdown(I18N("book_repair_info"))
+                            book_scan_btn = gr.Button(I18N("book_scan_btn"), size="sm")
+                            book_defects = gr.Markdown(value="")
+                            book_defect_choice = gr.Dropdown(
+                                choices=[], value=None, label=I18N("book_defect_label")
+                            )
+                            book_repair_btn = gr.Button(
+                                I18N("book_repair_btn"), variant="primary", size="sm"
+                            )
+                            book_repair_status = gr.Markdown(value="")
                         book_output_file = gr.File(label=I18N("book_file_output_label"))
 
         show_prompt_text.change(
@@ -1534,6 +1691,22 @@ def create_demo_interface(demo: VoxCPMDemo):
             outputs=[book_preview_audio],
             show_progress=True,
             api_name="preview_book_voice",
+        )
+
+        book_scan_btn.click(
+            fn=_book_scan_defects,
+            inputs=[book_title],
+            outputs=[book_defect_choice, book_defects, book_repair_status],
+            show_progress=True,
+            api_name="scan_book_defects",
+        )
+
+        book_repair_btn.click(
+            fn=_book_repair_segment,
+            inputs=[book_title, book_defect_choice, book_qc_retries],
+            outputs=[book_repair_status, book_audio],
+            show_progress=True,
+            api_name="repair_book_segment",
         )
 
         book_assemble_btn.click(
