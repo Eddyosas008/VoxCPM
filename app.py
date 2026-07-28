@@ -719,6 +719,29 @@ def create_demo_interface(demo: VoxCPMDemo):
             return None
         return int(seed_value)
 
+    def _resolve_voice(preset_name, description, seed_value, cfg, steps, normalize):
+        """Voice parameters to use, preferring the selected preset over the boxes.
+
+        A preset carries its own description, seed, CFG and steps. Reading those
+        from the text boxes instead lets the two drift apart — and a missing seed
+        turns "play this voice" into a from-scratch generation, which is tens of
+        minutes on a CPU.
+        """
+        preset = (
+            _PRESET_BY_NAME.get(preset_name)
+            if preset_name and preset_name != PRESET_CUSTOM_LABEL
+            else None
+        )
+        if preset is None:
+            return (description or ""), _coerce_seed(seed_value), cfg, steps, normalize
+        return (
+            preset.get("description", description or ""),
+            _coerce_seed(preset.get("seed")),
+            preset.get("cfg", cfg),
+            preset.get("diffusion_steps", steps),
+            preset.get("normalize", normalize),
+        )
+
     def _prepare_seed(use_random_seed: bool, seed_value):
         if use_random_seed:
             return random.randint(0, 2**32 - 1)
@@ -834,19 +857,9 @@ def create_demo_interface(demo: VoxCPMDemo):
         voice" silently becomes a from-scratch generation — roughly forty
         minutes on a CPU, with nothing on screen to say so.
         """
-        preset = (
-            _PRESET_BY_NAME.get(preset_name)
-            if preset_name and preset_name != PRESET_CUSTOM_LABEL
-            else None
+        description, seed, cfg, steps, normalize = _resolve_voice(
+            preset_name, description, seed_value, cfg, steps, normalize
         )
-        if preset is not None:
-            description = preset.get("description", description)
-            seed = _coerce_seed(preset.get("seed"))
-            cfg = preset.get("cfg", cfg)
-            steps = preset.get("diffusion_steps", steps)
-            normalize = preset.get("normalize", normalize)
-        else:
-            seed = _coerce_seed(seed_value)
 
         cache_path = None
         if seed is not None:
@@ -965,14 +978,15 @@ def create_demo_interface(demo: VoxCPMDemo):
         if not chapters:
             raise gr.Error("Aucun texte à narrer. Chargez un fichier .txt ou collez le texte.")
 
-        description = control_instruction or ""
+        description, seed, cfg_value, dit_steps, do_normalize = _resolve_voice(
+            preset_name, control_instruction, seed_value, cfg_value, dit_steps, do_normalize
+        )
         if not description.strip():
             raise gr.Error(
-                "Choisissez d'abord une voix dans l'onglet Studio "
-                "(la description de la voix est vide)."
+                "Choisissez une voix dans la liste ci-dessus, ou décrivez-en une "
+                "dans l'onglet Studio."
             )
 
-        seed = _coerce_seed(seed_value)
         outdir = _book_dir(title)
         outdir.mkdir(parents=True, exist_ok=True)
         profile = _book_profile(pause_sentence, pause_paragraph)
@@ -1294,6 +1308,28 @@ def create_demo_interface(demo: VoxCPMDemo):
                             book_title = gr.Textbox(value="", label=I18N("book_title_label"))
                             book_author = gr.Textbox(value="", label=I18N("book_author_label"))
 
+                        # The book's own voice picker. Deliberately not a mirror
+                        # of the Studio one: this dropdown is what the book is
+                        # narrated with, so choosing a voice for a book never
+                        # means leaving the tab.
+                        with gr.Row():
+                            book_preset_voice = gr.Dropdown(
+                                # Every voice, not the Studio tab's language
+                                # filter: a book picked here should never be
+                                # silently restricted by a control it cannot see.
+                                choices=[PRESET_CUSTOM_LABEL] + _voice_names_for_lang(None),
+                                value=PRESET_CUSTOM_LABEL,
+                                label=I18N("preset_voices_label"),
+                                info=I18N("preset_voices_info"),
+                                scale=3,
+                            )
+                            book_preview_btn = gr.Button(
+                                I18N("preview_btn_label"), size="sm", scale=1
+                            )
+                        book_preview_audio = gr.Audio(
+                            label=I18N("preview_btn_label"), visible=False
+                        )
+
                         with gr.Accordion(I18N("book_settings_title"), open=False):
                             book_prepare = gr.Checkbox(
                                 value=True,
@@ -1473,12 +1509,31 @@ def create_demo_interface(demo: VoxCPMDemo):
                 book_target_rms,
                 book_pause_sentence,
                 book_pause_paragraph,
-                preset_voice,
+                book_preset_voice,
                 book_qc_retries,
             ],
             outputs=[book_status, book_audio],
             show_progress=True,
             api_name="narrate_book",
+        )
+
+        book_preview_btn.click(
+            fn=lambda: gr.update(visible=True),
+            outputs=[book_preview_audio],
+            show_progress=False,
+        ).then(
+            fn=_preview_voice,
+            inputs=[
+                control_instruction,
+                seed_value,
+                cfg_value,
+                dit_steps,
+                DoNormalizeText,
+                book_preset_voice,
+            ],
+            outputs=[book_preview_audio],
+            show_progress=True,
+            api_name="preview_book_voice",
         )
 
         book_assemble_btn.click(
