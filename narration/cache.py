@@ -127,7 +127,29 @@ class ChunkCache:
         self.stats.hits += 1
         return int(sample_rate), np.asarray(data, dtype=np.float32)
 
-    def put(self, key: str, sample_rate: int, wav: np.ndarray, text: str = "") -> Optional[Path]:
+    def attempt_of(self, key: str) -> int:
+        """Which re-roll produced the stored entry — 0 when it is the first take.
+
+        Recorded so that repairing the same segment twice gives two different
+        takes: the seed of a re-roll is derived from the attempt number, so
+        without this the second repair would reproduce the first one exactly.
+        """
+        sidecar = self.path(key).with_suffix(".json")
+        if not sidecar.is_file():
+            return 0
+        try:
+            return int(json.loads(sidecar.read_text(encoding="utf-8")).get("attempt", 0))
+        except (OSError, ValueError, TypeError):
+            return 0
+
+    def put(
+        self,
+        key: str,
+        sample_rate: int,
+        wav: np.ndarray,
+        text: str = "",
+        attempt: int = 0,
+    ) -> Optional[Path]:
         """Store a generated segment. Returns the path, or None when disabled."""
         if not self.enabled:
             return None
@@ -146,12 +168,14 @@ class ChunkCache:
         except (RuntimeError, OSError):
             temporary.unlink(missing_ok=True)
             return None
-        if text:
-            self._write_sidecar(key, text, sample_rate, wav)
+        if text or attempt:
+            self._write_sidecar(key, text, sample_rate, wav, attempt)
         self.stats.writes += 1
         return target
 
-    def _write_sidecar(self, key: str, text: str, sample_rate: int, wav: np.ndarray) -> None:
+    def _write_sidecar(
+        self, key: str, text: str, sample_rate: int, wav: np.ndarray, attempt: int = 0
+    ) -> None:
         """Record what a cache file contains, so the directory stays readable.
 
         Never fatal: losing a debugging aid must not lose the audio it describes.
@@ -163,6 +187,7 @@ class ChunkCache:
                         "text": text,
                         "duration_sec": round(len(wav) / float(sample_rate or 1), 3),
                         "sample_rate": int(sample_rate),
+                        "attempt": int(attempt),
                     },
                     ensure_ascii=False,
                     indent=1,

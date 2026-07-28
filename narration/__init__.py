@@ -13,7 +13,8 @@ Stages, in pipeline order::
     cache      content-addressed store so an interrupted run resumes per chunk
     quality    flag the segments the engine got wrong, and re-roll those only
     audio      trim, master and stitch the generated segments
+    repair     re-roll one segment and restitch its chapter, from a saved plan
     assemble   join chapters into a single MP3/M4B with chapter markers
 """
 
-__all__ = ["assemble", "audio", "cache", "chunking", "quality", "text_fr"]
+__all__ = ["assemble", "audio", "cache", "chunking", "quality", "repair", "text_fr"]
