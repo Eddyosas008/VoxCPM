@@ -23,14 +23,47 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import app  # noqa: E402
 
 
+def remaster_existing() -> int:
+    """Bring already-generated previews to the same level, without the model.
+
+    Raw generations span some 15 dB depending on the voice, which makes the
+    quietest presets hard to hear and makes auditioning unfair — level is heard
+    as quality. Levelling is a post-process, so this costs seconds rather than
+    the minutes per voice that regenerating would.
+    """
+    from narration import audio as audio_tools  # noqa: PLC0415 - only needed here
+
+    changed = 0
+    for voice in app.PRESET_VOICES:
+        path = app._PREVIEW_DIR / f"preview_{voice['seed']}.wav"
+        if not path.is_file():
+            print(f"seed={voice['seed']}: no preview yet, skipping", flush=True)
+            continue
+        wav, sample_rate = sf.read(str(path), dtype="float32")
+        before = audio_tools.speech_rms_db(wav, sample_rate)
+        mastered = app.master_preview(sample_rate, wav)
+        after = audio_tools.speech_rms_db(mastered, sample_rate)
+        sf.write(str(path), mastered, sample_rate)
+        changed += 1
+        print(f"seed={voice['seed']}: {before:6.1f} -> {after:6.1f} dBFS  {voice['name']}", flush=True)
+    print(f"Re-levelled {changed} preview(s).", flush=True)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--device", default="cpu", help="auto, cpu, mps, cuda, or cuda:N (default: cpu)")
     parser.add_argument("--model-id", default="openbmb/VoxCPM2", help="Model path or HF repo id")
     parser.add_argument("--force", action="store_true", help="Regenerate even if the preview already exists")
+    parser.add_argument("--remaster", action="store_true",
+                        help="Re-level existing previews in place and exit — no model, no generation")
     args = parser.parse_args()
 
     app._PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+
+    if args.remaster:
+        return remaster_existing()
+
     demo = app.VoxCPMDemo(model_id=args.model_id, device=args.device, load_denoiser=False)
 
     total = len(app.PRESET_VOICES)
@@ -50,6 +83,7 @@ def main() -> int:
             inference_timesteps=int(voice.get("diffusion_steps", 10)),
             seed=seed,
         )
+        wav = app.master_preview(sr, wav)
         sf.write(str(out), wav, sr)
         print(f"{tag}: saved -> {out.name} ({len(wav) / sr:.2f}s)", flush=True)
 

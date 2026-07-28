@@ -493,6 +493,19 @@ _LEXICON_PATH = Path(__file__).parent / "conf" / "pronunciation_fr.json"
 _PREVIEW_TEXT = "Bonjour, ceci est un aperçu de cette voix pour la narration de votre livre audio."
 _PREVIEW_DIR = Path(__file__).parent / "assets" / "voice_previews"
 
+# Previews are mastered like a chapter, for two reasons. Raw generations land
+# anywhere between -32 and -17 dBFS depending on the voice — a 15 dB spread, wide
+# enough that the quietest presets are barely audible on laptop speakers. And
+# comparing voices at different levels is not a comparison: the louder one always
+# sounds better. Shorter edge silences than a chapter, so a preview starts
+# playing at once.
+_PREVIEW_MASTERING = audio_tools.MasteringSettings(lead_sec=0.1, tail_sec=0.2)
+
+
+def master_preview(sample_rate: int, wav):
+    """Trim, de-click and level a preview to the narration target."""
+    return audio_tools.stitch([(wav, 0.0)], sample_rate, _PREVIEW_MASTERING)
+
 # Every generation is also archived here with a descriptive filename.
 _OUTPUT_DIR = Path(__file__).parent / "output"
 
@@ -909,6 +922,7 @@ def create_demo_interface(demo: VoxCPMDemo):
             inference_timesteps=int(steps),
             seed=seed,
         )
+        wav_np = master_preview(sr, wav_np)
         if cache_path is not None:
             try:
                 import soundfile as sf
