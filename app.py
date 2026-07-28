@@ -825,15 +825,50 @@ def create_demo_interface(demo: VoxCPMDemo):
         out_path = _save_output_wav(wav_np, sr, last_successful_seed, voice_name)
         return out_path, last_successful_seed
 
-    def _preview_voice(description, seed_value, cfg, steps, normalize):
-        """Generate (and cache) a short sample of the currently selected voice."""
-        seed = _coerce_seed(seed_value)
+    def _preview_voice(description, seed_value, cfg, steps, normalize, preset_name=None):
+        """Play the stored sample of the selected voice, generating it if absent.
+
+        A preset is asked for its own description and seed rather than reading
+        the text boxes. Those boxes can be empty or half-edited, and when the
+        seed is missing there is no cache key, so what looks like "play this
+        voice" silently becomes a from-scratch generation — roughly forty
+        minutes on a CPU, with nothing on screen to say so.
+        """
+        preset = (
+            _PRESET_BY_NAME.get(preset_name)
+            if preset_name and preset_name != PRESET_CUSTOM_LABEL
+            else None
+        )
+        if preset is not None:
+            description = preset.get("description", description)
+            seed = _coerce_seed(preset.get("seed"))
+            cfg = preset.get("cfg", cfg)
+            steps = preset.get("diffusion_steps", steps)
+            normalize = preset.get("normalize", normalize)
+        else:
+            seed = _coerce_seed(seed_value)
+
         cache_path = None
         if seed is not None:
             _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
             cache_path = _PREVIEW_DIR / f"preview_{seed}.wav"
             if cache_path.is_file():
                 return str(cache_path)
+
+        if not (description or "").strip():
+            raise gr.Error(
+                "Aucune voix à écouter : choisissez une voix prédéfinie dans la liste, "
+                "ou décrivez la voix souhaitée."
+            )
+
+        # Nothing cached, so this really is a generation. On CPU that is tens of
+        # minutes; saying so beats a button that appears to do nothing.
+        if not demo.device.startswith("cuda"):
+            gr.Warning(
+                "Aucun aperçu enregistré pour cette voix : génération en cours, "
+                "comptez plusieurs dizaines de minutes sur ce processeur. "
+                "scripts/pregenerate_previews.py permet de les préparer à l'avance."
+            )
         sr, wav_np, _ = demo.generate_tts_audio(
             text_input=_PREVIEW_TEXT,
             control_instruction=description or "",
@@ -1361,7 +1396,14 @@ def create_demo_interface(demo: VoxCPMDemo):
             show_progress=False,
         ).then(
             fn=_preview_voice,
-            inputs=[control_instruction, seed_value, cfg_value, dit_steps, DoNormalizeText],
+            inputs=[
+                control_instruction,
+                seed_value,
+                cfg_value,
+                dit_steps,
+                DoNormalizeText,
+                preset_voice,
+            ],
             outputs=[preview_audio],
             show_progress=True,
         )
