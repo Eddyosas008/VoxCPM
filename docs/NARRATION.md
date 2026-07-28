@@ -65,9 +65,13 @@ lancer l'app (ou export sous bash).
 
 ### 1. Onglet « 📚 Livre audio » — pour un livre depuis l'interface
 
-1. Choisis d'abord une voix dans l'onglet **🎙️ Studio** (la description et le seed
-   de cette voix sont ceux qui seront utilisés).
-2. Passe sur l'onglet **📚 Livre audio**, charge ton `.txt` ou colle le texte.
+1. Dans l'onglet **📚 Livre audio**, choisis une voix dans la liste **🎭 Voix
+   prédéfinies** et clique **« 🔊 Écouter un aperçu »** pour la comparer aux autres.
+   L'écoute est instantanée : les aperçus sont pré-générés dans
+   `assets/voice_previews/`. C'est cette liste qui détermine la voix du livre.
+   Pour une voix sur mesure, laisse-la sur **« Personnalisé / manuel »** et décris
+   la voix dans l'onglet **🎙️ Studio**.
+2. Charge ton `.txt` ou colle le texte.
 3. Clique **« 🔍 Analyser sans générer »** : tu vois le nombre de chapitres, de
    segments, la durée estimée, et **le premier segment tel qu'il sera réellement lu**
    (après préparation du texte). C'est le moment de repérer un nombre ou une
