@@ -26,7 +26,7 @@ from voxcpm.model.utils import resolve_runtime_device
 from narration import assemble as assembly
 from narration import audio as audio_tools
 from narration import cache as cache_tools
-from narration import chunking, text_fr
+from narration import chunking, quality, text_fr
 
 logging.basicConfig(
     level=logging.INFO,
@@ -223,6 +223,9 @@ _I18N_TRANSLATIONS = {
         "book_target_rms_info": "Audiobook platforms expect RMS between -23 and -18 dBFS.",
         "book_pause_sentence_label": "Pause after a sentence (s)",
         "book_pause_paragraph_label": "Pause after a paragraph (s)",
+        "book_qc_label": "Quality re-rolls per segment",
+        "book_qc_info": "A segment that comes back truncated, silent or babbling is generated "
+                        "again with a derived seed. 0 only reports the defects.",
         "usage_instructions": _USAGE_INSTRUCTIONS_EN,
         "examples_footer": _EXAMPLES_FOOTER_EN,
     },
@@ -283,6 +286,9 @@ _I18N_TRANSLATIONS = {
         "book_target_rms_info": "Les plateformes de livres audio attendent un RMS entre -23 et -18 dBFS.",
         "book_pause_sentence_label": "Pause après une phrase (s)",
         "book_pause_paragraph_label": "Pause après un paragraphe (s)",
+        "book_qc_label": "Réessais qualité par segment",
+        "book_qc_info": "Un segment qui revient tronqué, muet ou parti en boucle est régénéré "
+                        "avec une graine dérivée. 0 se contente de signaler les défauts.",
         "usage_instructions": _USAGE_INSTRUCTIONS_FR,
         "examples_footer": _EXAMPLES_FOOTER_FR,
     },
@@ -912,6 +918,7 @@ def create_demo_interface(demo: VoxCPMDemo):
         pause_sentence,
         pause_paragraph,
         preset_name,
+        qc_retries,
         progress=gr.Progress(),
     ):
         """Narrate every chapter, writing each one to disk as soon as it is done.
@@ -951,6 +958,8 @@ def create_demo_interface(demo: VoxCPMDemo):
             f"Voix : **{voice_label}** · graine `{seed}` · dossier `{outdir.name}`\n",
         ]
         last_chapter_path = None
+        qc_flagged: List[Tuple[str, quality.SegmentReport]] = []
+        qc_inspected = 0
         yield "\n".join(lines), None
 
         for index, chapter in enumerate(chapters, 1):
@@ -969,21 +978,43 @@ def create_demo_interface(demo: VoxCPMDemo):
 
             rendered: List[Tuple[np.ndarray, float]] = []
             sr = None
-            for segment in progress.tqdm(segments, desc=f"Chapitre {index}/{len(chapters)}"):
+            for position, segment in enumerate(
+                progress.tqdm(segments, desc=f"Chapitre {index}/{len(chapters)}"), 1
+            ):
                 key = cache.key(segment.text, voice_spec)
                 cached = cache.get(key)
                 if cached is not None:
                     sr, wav_chunk = cached
+                    report = quality.inspect_segment(wav_chunk, sr, segment.text)
                 else:
-                    sr, wav_chunk, _ = demo.generate_tts_audio(
-                        text_input=segment.text,
-                        control_instruction=description,
-                        cfg_value_input=cfg_value,
-                        do_normalize=do_normalize,
-                        inference_timesteps=int(dit_steps),
-                        seed=seed,
+                    def render(current_seed, _segment=segment):
+                        sample_rate, wav_out, _ = demo.generate_tts_audio(
+                            text_input=_segment.text,
+                            control_instruction=description,
+                            cfg_value_input=cfg_value,
+                            do_normalize=do_normalize,
+                            inference_timesteps=int(dit_steps),
+                            seed=current_seed,
+                        )
+                        return sample_rate, wav_out
+
+                    result = quality.render_checked(
+                        segment.text, render, base_seed=seed, max_attempts=int(qc_retries) + 1
                     )
+                    sr, wav_chunk, report = result.sample_rate, result.wav, result.report
                     cache.put(key, sr, wav_chunk, text=segment.text)
+
+                qc_inspected += 1
+                if not report.ok:
+                    # Surfaced as it happens rather than only in the final
+                    # summary: on a run that lasts hours, a defect worth
+                    # stopping for should not wait until the end to be seen.
+                    qc_flagged.append((f"ch{index:03d}/seg{position:03d}", report))
+                    lines.append(
+                        f"  - {'❌' if report.fatal else '⚠️'} chapitre {index}, segment "
+                        f"{position}/{len(segments)} — {report.describe()}"
+                    )
+                    yield "\n".join(lines), last_chapter_path
                 rendered.append((wav_chunk, segment.pause_after))
 
             chapter_audio = audio_tools.stitch(rendered, sr, mastering)
@@ -997,6 +1028,21 @@ def create_demo_interface(demo: VoxCPMDemo):
             yield "\n".join(lines), last_chapter_path
 
         lines.append(f"\n**Terminé.** {cache.stats.describe()}")
+        if qc_flagged:
+            summary = quality.summarize(qc_flagged)
+            (outdir / "qc_report.json").write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            codes = ", ".join(f"{code}×{count}" for code, count in sorted(summary["by_code"].items()))
+            lines.append(
+                f"\n**Contrôle qualité :** {summary['flagged']} segment(s) signalé(s) "
+                f"({codes}), dont {summary['fatal']} non réparé(s) — détail dans "
+                f"`{outdir.name}/qc_report.json`."
+            )
+        elif qc_inspected:
+            lines.append(
+                f"\n**Contrôle qualité :** {qc_inspected} segment(s) inspecté(s), aucun défaut."
+            )
         lines.append(f"\nChapitres dans `{outdir}` — utilisez « Assembler » pour un fichier unique.")
         yield "\n".join(lines), last_chapter_path
 
@@ -1242,6 +1288,14 @@ def create_demo_interface(demo: VoxCPMDemo):
                                 step=0.05,
                                 label=I18N("book_pause_paragraph_label"),
                             )
+                            book_qc_retries = gr.Slider(
+                                minimum=0,
+                                maximum=3,
+                                value=1,
+                                step=1,
+                                label=I18N("book_qc_label"),
+                                info=I18N("book_qc_info"),
+                            )
 
                         with gr.Row():
                             book_plan_btn = gr.Button(I18N("book_plan_btn"), size="sm")
@@ -1378,6 +1432,7 @@ def create_demo_interface(demo: VoxCPMDemo):
                 book_pause_sentence,
                 book_pause_paragraph,
                 preset_voice,
+                book_qc_retries,
             ],
             outputs=[book_status, book_audio],
             show_progress=True,
