@@ -154,6 +154,62 @@ Vérifier un livre assemblé :
 .\.venv\Scripts\python.exe scripts\assemble_audiobook.py output\book_mon_livre --check
 ```
 
+## Contrôle qualité automatique
+
+Le moteur échoue rarement, mais il échoue **localement** : un segment sur quelques
+dizaines revient coupé au milieu d'un mot, muet, ou parti en boucle bien après la fin
+de son texte. Sur GPU on régénère le chapitre. Sur CPU un chapitre représente des
+heures, donc la seule réparation abordable porte sur le segment fautif — encore
+faut-il le trouver. Écouter quatre heures de narration pour repérer onze secondes
+n'est pas une méthode.
+
+Chaque segment généré est donc confronté **au texte qui l'a produit**. C'est ce
+couplage qui rend la détection possible : l'audio seul ne peut pas dire si deux
+secondes constituent une phrase complète, mais deux secondes pour deux cents
+caractères sont une troncature, sans ambiguïté.
+
+| Code | Gravité | Ce qui est détecté |
+|---|---|---|
+| `silent` | fatal | rien n'est revenu |
+| `truncated` | fatal | beaucoup moins d'audio que le texte ne l'implique |
+| `runaway` | fatal | beaucoup plus — le moteur a bouclé ou divagué |
+| `clipped` | fatal | échantillons saturés, irrécupérables au mastering |
+| `gap` | suspect | long silence interne, signature d'une proposition sautée |
+| `abrupt_end` | suspect | s'arrête au niveau de parole, sans décroissance |
+| `looped` | suspect | l'enveloppe de niveau se répète |
+
+Seuls les défauts **fatals** déclenchent une régénération, avec une seed dérivée de
+la seed d'origine — donc reproductible : le même livre relancé de zéro répare le même
+segment de la même façon. Le meilleur essai est conservé, jamais le dernier : un
+second tirage peut être pire que le premier, et garder silencieusement le pire
+rendrait la réparation nuisible.
+
+```bash
+# Comportement par défaut : un nouvel essai par segment fatalement défectueux
+python scripts/narrate_book.py livre.txt --voice "..."
+
+# Plus insistant sur un livre qu'on ne veut pas réécouter segment par segment
+python scripts/narrate_book.py livre.txt --voice "..." --qc-retries 3
+
+# Signaler sans régénérer (utile pour auditer un livre déjà produit)
+python scripts/narrate_book.py livre.txt --voice "..." --qc-retries 0
+
+# Sortie en code d'erreur s'il reste un défaut — pour un enchaînement automatisé
+python scripts/narrate_book.py livre.txt --voice "..." --qc-strict
+```
+
+Le bilan est écrit dans `output/book_<nom>/qc_report.json` : un segment par entrée,
+avec sa durée, son débit et ses défauts. `--no-qc` désactive tout.
+
+**Sur les seuils de débit.** Ce sont eux qui portent la détection de troncature, et
+ils viennent de la mesure, pas d'une estimation : sur la même phrase de 81
+caractères, les sept voix préréglées produisent entre **15,8 et 24,1 caractères par
+seconde**, soit plus de 50 % d'écart entre la plus lente et la plus rapide. Les
+bornes (35 et 6 car/s) sont donc placées largement en dehors de cette plage — choisir
+une voix rapide ne doit jamais ressembler à un défaut — tout en restant franchies par
+une troncature qui perdrait la moitié d'une phrase. Un test verrouille ces valeurs
+mesurées, pour qu'un réglage ultérieur ne puisse pas les faire dériver sans alerte.
+
 ## Assemblage en un fichier unique
 
 ```
