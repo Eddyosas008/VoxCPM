@@ -31,6 +31,7 @@ __all__ = [
     "acx_report",
     "as_float_mono",
     "fade_edges",
+    "frame_rms_db",
     "master_segment",
     "noise_floor_db",
     "normalize_level",
@@ -155,6 +156,24 @@ def speech_rms_db(wav: np.ndarray, sr: int, frame_ms: float = 400.0, hop_ms: flo
     if speech.size == 0:
         speech = kept
     return _to_db(float(np.sqrt(speech.mean())))
+
+
+def frame_rms_db(
+    wav: np.ndarray, sr: int, frame_ms: float = 50.0, hop_ms: float = 25.0
+) -> np.ndarray:
+    """Level of every frame in dBFS, as a 1-D array.
+
+    The shape of this curve over time is what tells a dropped sentence or a
+    segment cut off mid-word apart from a clean one, so :mod:`narration.quality`
+    reads it rather than re-deriving the framing itself.
+    """
+    wav = as_float_mono(wav)
+    if wav.size == 0:
+        return np.zeros(0, dtype=np.float32)
+    power = _frame_power(wav, sr, frame_ms, hop_ms)
+    if power.size == 0:
+        return np.zeros(0, dtype=np.float32)
+    return (10.0 * np.log10(np.maximum(power, _EPS))).astype(np.float32)
 
 
 def peak_db(wav: np.ndarray) -> float:
