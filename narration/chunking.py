@@ -1,0 +1,163 @@
+"""Cut prepared text into engine-sized segments, with a pause plan.
+
+The engine cannot synthesize an arbitrarily long passage — it errors out above
+roughly 8192 tokens — so long-form text must be segmented no matter what. That
+constraint turns out to be an opportunity: the boundary between two segments is
+exactly where a narrator would draw breath, so each segment carries how long the
+silence after it should be.
+
+A uniform gap between segments is what makes machine narration sound mechanical.
+Here the pause follows the punctuation that caused the split: a paragraph break
+breathes longer than a full stop, which breathes longer than a comma.
+
+Segments never span a paragraph boundary, which keeps the pacing honest and
+gives the resume cache stable keys — reflowing one paragraph does not invalidate
+the segments of every paragraph after it.
+"""
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from typing import List, Optional, Sequence
+
+__all__ = [
+    "DEFAULT_MAX_CHARS",
+    "PauseProfile",
+    "Segment",
+    "split_chapters",
+    "split_into_segments",
+    "split_text_into_chunks",
+]
+
+#: Characters per segment. Well under the engine limit: shorter segments also
+#: fail less often and cost less to regenerate when one comes out badly.
+DEFAULT_MAX_CHARS = 300
+
+_PARAGRAPH_SPLIT_RE = re.compile(r"\n\s*\n")
+
+# Sentence boundaries, in two parts:
+#   * end punctuation followed by whitespace — including when a closing quote or
+#     bracket sits between them, as in `Il dit "oui." Puis...`, where a bare
+#     lookbehind sees `"` rather than `.` and finds no boundary at all;
+#   * any line break, even without surrounding spaces, so hard-wrapped prose,
+#     verse and dialogue lines split where they visibly break.
+# Each lookbehind alternative is separately fixed-width, which is what Python's
+# re module requires.
+_SENTENCE_SPLIT_RE = re.compile(
+    r"(?:(?<=[.!?…。！？])|(?<=[.!?…。！？][\"'»)\]]))\s+"
+    r"|\s*\n\s*"
+)
+_SENTENCE_END_RE = re.compile(r"[.!?…。！？][\"'»)\]]*$")
+_CHAPTER_SPLIT_RE = r"(?m)^\s*---\s*$"
+
+
+@dataclass(frozen=True)
+class PauseProfile:
+    """Silence inserted after a segment, by the reason the split happened.
+
+    Values are seconds. The defaults are on the generous side of natural speech
+    because listeners forgive a slow narrator far more readily than a breathless
+    one, and because audiobooks are usually heard at increased playback speed.
+    """
+
+    #: Split inside a sentence — the segment hit the character limit.
+    clause: float = 0.25
+    #: Segment ends on a full stop, question or exclamation mark.
+    sentence: float = 0.45
+    #: Segment ends a paragraph.
+    paragraph: float = 0.9
+
+    def for_segment(self, text: str, ends_paragraph: bool) -> float:
+        if ends_paragraph:
+            return self.paragraph
+        return self.sentence if _SENTENCE_END_RE.search(text.rstrip()) else self.clause
+
+
+@dataclass(frozen=True)
+class Segment:
+    """One unit of synthesis, plus the silence that should follow it."""
+
+    text: str
+    pause_after: float
+    #: Index of the source paragraph, kept for progress reporting and debugging.
+    paragraph: int = 0
+
+
+def _pack_sentences(text: str, max_chars: int) -> List[str]:
+    """Greedily pack whole sentences into chunks no longer than ``max_chars``.
+
+    A single sentence longer than the limit becomes its own chunk: splitting it
+    further would cut mid-clause, which is far more audible than a slightly long
+    segment.
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
+    chunks: List[str] = []
+    current = ""
+    for sentence in sentences:
+        if len(sentence) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.append(sentence)
+        elif current and len(current) + 1 + len(sentence) > max_chars:
+            chunks.append(current)
+            current = sentence
+        else:
+            current = f"{current} {sentence}" if current else sentence
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def split_text_into_chunks(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> List[str]:
+    """Plain list of segment texts, without the pause plan.
+
+    Kept for callers that only need the segmentation (the single-shot UI path
+    and anything written against the original helper in ``app.py``).
+    """
+    return _pack_sentences(text, max_chars)
+
+
+def split_into_segments(
+    text: str,
+    max_chars: int = DEFAULT_MAX_CHARS,
+    profile: PauseProfile = PauseProfile(),
+) -> List[Segment]:
+    """Segment a chapter and decide how long the silence after each part is."""
+    text = (text or "").strip()
+    if not text:
+        return []
+
+    paragraphs = [p.strip() for p in _PARAGRAPH_SPLIT_RE.split(text) if p.strip()]
+    segments: List[Segment] = []
+    for paragraph_index, paragraph in enumerate(paragraphs):
+        chunks = _pack_sentences(paragraph, max_chars)
+        for chunk_index, chunk in enumerate(chunks):
+            ends_paragraph = chunk_index == len(chunks) - 1
+            segments.append(
+                Segment(
+                    text=chunk,
+                    pause_after=profile.for_segment(chunk, ends_paragraph),
+                    paragraph=paragraph_index,
+                )
+            )
+    return segments
+
+
+def split_chapters(text: str, pattern: Optional[str] = None) -> List[str]:
+    """Split a book into chapters on a separator line (``---`` by default).
+
+    Text with no separator at all is a single chapter rather than an error — a
+    one-chapter book is a perfectly ordinary thing to narrate.
+    """
+    parts = re.split(pattern or _CHAPTER_SPLIT_RE, text or "")
+    chapters = [p.strip() for p in parts if p and p.strip()]
+    return chapters or ([text.strip()] if (text or "").strip() else [])
+
+
+def total_characters(segments: Sequence[Segment]) -> int:
+    """Characters that will actually be sent to the engine."""
+    return sum(len(segment.text) for segment in segments)

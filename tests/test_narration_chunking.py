@@ -1,0 +1,101 @@
+"""Tests for segmentation and the pause plan."""
+import pytest
+
+from narration.chunking import (
+    PauseProfile,
+    split_chapters,
+    split_into_segments,
+    split_text_into_chunks,
+)
+
+
+class TestSplitTextIntoChunks:
+    def test_empty(self):
+        assert split_text_into_chunks("") == []
+        assert split_text_into_chunks("   ") == []
+
+    def test_short_text_is_one_chunk(self):
+        assert split_text_into_chunks("Bonjour le monde.") == ["Bonjour le monde."]
+
+    def test_sentences_are_packed_up_to_the_limit(self):
+        text = "Un. Deux. Trois. Quatre."
+        chunks = split_text_into_chunks(text, max_chars=12)
+        assert all(len(c) <= 12 for c in chunks)
+        assert " ".join(chunks) == text
+
+    def test_no_sentence_is_ever_cut_in_half(self):
+        long_sentence = "mot " * 200
+        chunks = split_text_into_chunks(long_sentence.strip(), max_chars=50)
+        # An over-long sentence stays whole rather than being cut mid-clause.
+        assert len(chunks) == 1
+
+    def test_every_word_survives(self):
+        text = "Première phrase ici. Deuxième phrase là. Troisième enfin."
+        assert " ".join(split_text_into_chunks(text, max_chars=25)) == text
+
+
+class TestSplitIntoSegments:
+    def test_pause_is_longer_after_a_paragraph_than_after_a_sentence(self):
+        segments = split_into_segments("Une phrase. Une autre.\n\nNouveau paragraphe.", max_chars=15)
+        pauses = [s.pause_after for s in segments]
+        profile = PauseProfile()
+        assert profile.paragraph in pauses
+        assert profile.sentence in pauses
+        assert max(pauses) == profile.paragraph
+
+    def test_a_split_that_lands_mid_sentence_gets_the_shortest_pause(self):
+        # A line break inside a paragraph (verse, dialogue, an address) is a
+        # split point that is not a sentence end.
+        segments = split_into_segments("Première ligne\nDeuxième ligne.", max_chars=20)
+        assert [s.text for s in segments] == ["Première ligne", "Deuxième ligne."]
+        assert segments[0].pause_after == PauseProfile().clause
+
+    def test_segments_never_span_a_paragraph(self):
+        segments = split_into_segments("Court.\n\nAussi court.", max_chars=500)
+        assert [s.text for s in segments] == ["Court.", "Aussi court."]
+        assert [s.paragraph for s in segments] == [0, 1]
+
+    @pytest.mark.parametrize("ending", ["Vraiment?", "Incroyable!", "Et alors…"])
+    def test_question_and_exclamation_end_sentences(self, ending):
+        # A second sentence keeps the first one away from the paragraph end,
+        # where the longer paragraph pause would apply instead.
+        segments = split_into_segments(f"{ending} Puis il partit.", max_chars=12)
+        assert segments[0].pause_after == PauseProfile().sentence
+
+    def test_closing_quote_after_the_full_stop_still_ends_the_sentence(self):
+        segments = split_into_segments('Il dit "oui." Puis il partit.', max_chars=14)
+        assert segments[0].pause_after == PauseProfile().sentence
+
+    def test_the_last_segment_of_a_paragraph_gets_the_paragraph_pause(self):
+        segments = split_into_segments("Une phrase.")
+        assert segments[0].pause_after == PauseProfile().paragraph
+
+    def test_custom_profile_is_honoured(self):
+        profile = PauseProfile(clause=0.1, sentence=0.2, paragraph=0.3)
+        segments = split_into_segments("Une phrase.\n\nUne autre.", profile=profile)
+        assert segments[0].pause_after == 0.3
+
+    def test_empty_text(self):
+        assert split_into_segments("") == []
+
+
+class TestSplitChapters:
+    def test_default_separator(self):
+        assert split_chapters("Un\n\n---\n\nDeux") == ["Un", "Deux"]
+
+    def test_text_without_a_separator_is_a_single_chapter(self):
+        assert split_chapters("Un seul chapitre.") == ["Un seul chapitre."]
+
+    def test_empty_text_yields_nothing(self):
+        assert split_chapters("") == []
+
+    def test_blank_chapters_are_dropped(self):
+        assert split_chapters("Un\n---\n\n\n---\nDeux") == ["Un", "Deux"]
+
+    def test_custom_pattern(self):
+        chapters = split_chapters("A\nCHAPITRE\nB", pattern=r"(?m)^CHAPITRE$")
+        assert chapters == ["A", "B"]
+
+    @pytest.mark.parametrize("separator", ["---", "  ---  ", "---   "])
+    def test_separator_tolerates_surrounding_whitespace(self, separator):
+        assert split_chapters(f"Un\n{separator}\nDeux") == ["Un", "Deux"]
