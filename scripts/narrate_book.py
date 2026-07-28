@@ -4,37 +4,43 @@ Designed for long-form content (books, guided meditations, podcast scripts) wher
 a single generation call is not possible (the engine errors above ~8192 tokens)
 and holding the whole audio in memory is wasteful.
 
-How it works
+The pipeline
 ------------
-- Reads a UTF-8 ``.txt`` file. Chapters are separated by a line containing only
-  ``---`` (Markdown horizontal rule) by default, or by ``--chapter-regex``. If no
-  separator is found, the whole text is treated as a single chapter.
-- Each chapter is split into sentence chunks (reusing ``app._split_text_into_chunks``)
-  so every call stays well under the engine's token limit.
-- Chunks are synthesized with the SAME seed for a consistent voice, then stitched
-  per chapter with a short silence.
-- **Memory-safe:** only one chapter is held in memory at a time, never the whole book.
-- **Resumable:** a chapter whose output ``.wav`` already exists is skipped, so an
-  interrupted run continues where it left off. Use ``--force`` to regenerate.
-- The denoiser is never loaded (narration uses no reference audio), so startup is
-  fast and does not touch ModelScope.
+1. **Prepare** — the text goes through the French normalizer, so ``1789``,
+   ``M. Dupont``, ``XIVe siècle`` and ``14h30`` are read as a narrator would say
+   them (``--no-text-prep`` to disable, ``--lexicon`` for your own proper nouns).
+2. **Segment** — each chapter is cut on sentence boundaries so every call stays
+   well under the engine's token limit, and each segment carries how long the
+   pause after it should be: longer after a paragraph than after a full stop.
+3. **Synthesize** — with the SAME seed throughout, so the voice stays identical.
+   Every segment is cached by content, so an interrupted run resumes at the
+   segment it died on rather than restarting the chapter.
+4. **Master** — segments are trimmed, de-clicked, stitched with their pauses and
+   normalised once per chapter to the audiobook loudness target.
+5. **Assemble** (optional, ``--assemble``) — chapters are joined into a single
+   M4B/MP3 with chapter markers.
+
+**Memory-safe:** only one chapter is held in memory at a time, never the book.
+**Resumable:** finished chapters are skipped, and within an unfinished chapter
+every already-generated segment comes from the cache.
+The denoiser is never loaded (narration uses no reference audio), so startup is
+fast and does not touch ModelScope.
 
 Examples
 --------
-  # Preview segmentation without generating anything (fast, no model load):
+  # Preview segmentation and prepared text without generating anything:
   ./.venv/Scripts/python.exe scripts/narrate_book.py livre.txt --voice "Narrateur profond & calme" --dry-run
 
-  # Narrate with a preset voice:
-  ./.venv/Scripts/python.exe scripts/narrate_book.py livre.txt --voice "Narrateur profond & calme"
+  # Narrate with a preset voice, then assemble an M4B:
+  ./.venv/Scripts/python.exe scripts/narrate_book.py livre.txt --voice "Narrateur profond & calme" --assemble m4b
 
-  # Narrate with a custom voice (description + seed):
+  # Custom voice (description + seed):
   ./.venv/Scripts/python.exe scripts/narrate_book.py livre.txt --description "Voix ..." --seed 123
 
   # On a CUDA GPU (far faster):
   ./.venv/Scripts/python.exe scripts/narrate_book.py livre.txt --voice "..." --device cuda
 """
 import argparse
-import re
 import os
 import sys
 import tempfile
@@ -48,14 +54,14 @@ import soundfile as sf
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app  # noqa: E402
+from narration import assemble as assembly  # noqa: E402
+from narration import audio as audio_tools  # noqa: E402
+from narration import cache as cache_tools  # noqa: E402
+from narration import chunking, text_fr  # noqa: E402
 
-
-def split_chapters(text: str, chapter_regex: str | None) -> list[str]:
-    """Split the book text into chapters. Defaults to Markdown '---' rules."""
-    pattern = chapter_regex if chapter_regex else r"(?m)^\s*---\s*$"
-    parts = re.split(pattern, text)
-    chapters = [p.strip() for p in parts if p.strip()]
-    return chapters or [text.strip()]
+#: Rough characters-per-second of finished narration, used only to estimate how
+#: long a book will run before committing hours of CPU to it.
+_CHARS_PER_SECOND = 14.0
 
 
 def resolve_voice(args) -> tuple[str, int | None]:
@@ -69,30 +75,73 @@ def resolve_voice(args) -> tuple[str, int | None]:
     return (args.description or ""), args.seed
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def chapter_title(chapter: str, index: int) -> str:
+    """First non-empty line of a chapter, used as its marker title."""
+    for line in chapter.splitlines():
+        stripped = line.strip().lstrip("#").strip()
+        if stripped:
+            return stripped[:80]
+    return f"Chapitre {index}"
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("input", help="Path to the .txt file to narrate")
-    parser.add_argument("--voice", help="Preset voice name (see conf/preset_voices.json)")
-    parser.add_argument("--description", help="Custom voice description (if not using --voice)")
-    parser.add_argument("--seed", type=int, help="Seed for the custom voice (fixes the voice identity)")
-    parser.add_argument("--outdir", help="Output directory (default: output/book_<filename>)")
-    parser.add_argument("--device", default="cpu", help="auto, cpu, mps, cuda, or cuda:N (default: cpu)")
-    parser.add_argument("--model-id", default="openbmb/VoxCPM2", help="Model path or HF repo id")
-    parser.add_argument("--chunk-max-chars", type=int, default=app._CHUNK_MAX_CHARS,
-                        help=f"Max characters per chunk (default: {app._CHUNK_MAX_CHARS})")
-    parser.add_argument("--silence", type=float, default=app._CHUNK_SILENCE_SEC,
-                        help=f"Silence between chunks in seconds (default: {app._CHUNK_SILENCE_SEC})")
-    parser.add_argument("--cfg", type=float, default=2.0, help="CFG guidance scale (default: 2.0)")
-    parser.add_argument("--steps", type=int, default=10, help="Diffusion steps (default: 10)")
-    parser.add_argument("--no-normalize", action="store_true", help="Disable text normalization")
-    parser.add_argument("--chapter-regex", help="Regex (MULTILINE) that separates chapters (default: '^---$')")
-    parser.add_argument("--force", action="store_true", help="Regenerate chapters even if their .wav exists")
-    parser.add_argument("--dry-run", action="store_true", help="Show the segmentation plan, generate nothing")
-    parser.add_argument("--continuity", action="store_true",
-                        help="EXPERIMENTAL: chain each chunk from the previous one (prompt-cache "
-                             "continuation) for smoother joins, instead of same-seed only. Slower; "
-                             "resets at each chapter boundary. Tune on a GPU (slow to iterate on CPU).")
-    args = parser.parse_args()
+
+    voice = parser.add_argument_group("voix")
+    voice.add_argument("--voice", help="Preset voice name (see conf/preset_voices.json)")
+    voice.add_argument("--description", help="Custom voice description (if not using --voice)")
+    voice.add_argument("--seed", type=int, help="Seed for the custom voice (fixes the voice identity)")
+    voice.add_argument("--cfg", type=float, default=2.0, help="CFG guidance scale (default: 2.0)")
+    voice.add_argument("--steps", type=int, default=10, help="Diffusion steps (default: 10)")
+
+    text = parser.add_argument_group("texte")
+    text.add_argument("--no-text-prep", action="store_true",
+                      help="Skip French normalization (numbers, abbreviations, Roman numerals)")
+    text.add_argument("--lexicon", default="conf/pronunciation_fr.json",
+                      help="Pronunciation lexicon JSON (default: conf/pronunciation_fr.json)")
+    text.add_argument("--no-normalize", action="store_true", help="Disable the engine's own text normalization")
+    text.add_argument("--chapter-regex", help="Regex (MULTILINE) that separates chapters (default: '^---$')")
+    text.add_argument("--chunk-max-chars", type=int, default=chunking.DEFAULT_MAX_CHARS,
+                      help=f"Max characters per segment (default: {chunking.DEFAULT_MAX_CHARS})")
+
+    pauses = parser.add_argument_group("pauses et mastering")
+    defaults = chunking.PauseProfile()
+    pauses.add_argument("--pause-clause", type=float, default=defaults.clause,
+                        help=f"Pause after a mid-sentence split (default: {defaults.clause}s)")
+    pauses.add_argument("--pause-sentence", type=float, default=defaults.sentence,
+                        help=f"Pause after a sentence (default: {defaults.sentence}s)")
+    pauses.add_argument("--pause-paragraph", type=float, default=defaults.paragraph,
+                        help=f"Pause after a paragraph (default: {defaults.paragraph}s)")
+    pauses.add_argument("--silence", type=float,
+                        help="Force one uniform pause everywhere, overriding the three above")
+    pauses.add_argument("--target-rms", type=float, default=audio_tools.MasteringSettings().target_rms_db,
+                        help="Loudness target in dBFS (ACX window is -23..-18, default: -20)")
+    pauses.add_argument("--no-master", action="store_true",
+                        help="Skip trimming, de-clicking and loudness normalization")
+
+    run = parser.add_argument_group("exécution")
+    run.add_argument("--outdir", help="Output directory (default: output/book_<filename>)")
+    run.add_argument("--device", default="cpu", help="auto, cpu, mps, cuda, or cuda:N (default: cpu)")
+    run.add_argument("--model-id", default="openbmb/VoxCPM2", help="Model path or HF repo id")
+    run.add_argument("--force", action="store_true", help="Regenerate chapters even if their .wav exists")
+    run.add_argument("--no-cache", action="store_true", help="Do not cache or reuse generated segments")
+    run.add_argument("--dry-run", action="store_true", help="Show the plan, generate nothing")
+    run.add_argument("--assemble", nargs="?", const="m4b", choices=["m4b", "m4a", "mp3", "wav"],
+                     help="Assemble the chapters into one chaptered file when done")
+    run.add_argument("--title", default="", help="Book title used for the assembled file")
+    run.add_argument("--author", default="", help="Author / narrator used for the assembled file")
+    run.add_argument("--continuity", action="store_true",
+                     help="EXPERIMENTAL: chain each segment from the previous one (prompt-cache "
+                          "continuation) for smoother joins, instead of same-seed only. Slower; "
+                          "resets at each chapter boundary. Tune on a GPU (slow to iterate on CPU).")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
 
     if not args.voice and not args.description:
         raise SystemExit("Provide either --voice <preset name> or --description <text> [--seed N].")
@@ -100,93 +149,185 @@ def main() -> int:
     in_path = Path(args.input)
     if not in_path.is_file():
         raise SystemExit(f"Input file not found: {in_path}")
-    text = in_path.read_text(encoding="utf-8").strip()
-    if not text:
+    raw_text = in_path.read_text(encoding="utf-8").strip()
+    if not raw_text:
         raise SystemExit(f"Input file is empty: {in_path}")
 
     description, seed = resolve_voice(args)
-    chapters = split_chapters(text, args.chapter_regex)
     outdir = Path(args.outdir) if args.outdir else app._OUTPUT_DIR / f"book_{app._sanitize_filename(in_path.stem)}"
 
-    # Plan: chunk every chapter up front so --dry-run can show the full picture.
-    plan = [(i, ch, app._split_text_into_chunks(ch, args.chunk_max_chars)) for i, ch in enumerate(chapters, 1)]
-    total_chunks = sum(len(chunks) for _, _, chunks in plan)
-    total_chars = sum(len(ch) for ch in chapters)
-    print(f"Input      : {in_path}")
-    print(f"Voice      : {args.voice or '(custom)'} | seed={seed}")
-    print(f"Chapters   : {len(chapters)} | chunks: {total_chunks} | chars: {total_chars}")
-    print(f"Output dir : {outdir}")
-    for i, _, chunks in plan:
-        print(f"  chapter {i:03d}: {len(chunks)} chunk(s)")
+    # ---- prepare -------------------------------------------------------
+    raw_chapters = chunking.split_chapters(raw_text, args.chapter_regex)
+    titles = [chapter_title(chapter, i) for i, chapter in enumerate(raw_chapters, 1)]
+
+    lexicon = {}
+    if not args.no_text_prep:
+        lexicon = text_fr.load_lexicon(args.lexicon)
+        chapters = [text_fr.normalize_french(chapter, lexicon=lexicon) for chapter in raw_chapters]
+    else:
+        chapters = raw_chapters
+
+    if args.silence is not None:
+        profile = chunking.PauseProfile(clause=args.silence, sentence=args.silence, paragraph=args.silence)
+    else:
+        profile = chunking.PauseProfile(
+            clause=args.pause_clause, sentence=args.pause_sentence, paragraph=args.pause_paragraph
+        )
+
+    plan = [
+        (index, chunking.split_into_segments(chapter, args.chunk_max_chars, profile))
+        for index, chapter in enumerate(chapters, 1)
+    ]
+    total_segments = sum(len(segments) for _, segments in plan)
+    total_chars = sum(chunking.total_characters(segments) for _, segments in plan)
+
+    print(f"Entrée      : {in_path}")
+    print(f"Voix        : {args.voice or '(personnalisée)'} | seed={seed}")
+    print(f"Préparation : {'désactivée' if args.no_text_prep else f'française ({len(lexicon)} entrée(s) de lexique)'}")
+    print(f"Chapitres   : {len(chapters)} | segments : {total_segments} | caractères : {total_chars}")
+    print(f"Durée estimée : ~{total_chars / _CHARS_PER_SECOND / 60:.0f} min de narration")
+    print(f"Sortie      : {outdir}")
+    for index, segments in plan:
+        print(f"  chapitre {index:03d}: {len(segments)} segment(s)  « {titles[index - 1][:50]} »")
 
     if args.dry_run:
-        print("\nDry run — nothing generated.")
+        if plan and plan[0][1]:
+            print("\nPremier segment après préparation du texte :")
+            print(f"  « {plan[0][1][0].text} »")
+        print("\nDry run — rien n'a été généré.")
         return 0
 
+    # ---- synthesize ----------------------------------------------------
     outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "titles.txt").write_text("\n".join(titles) + "\n", encoding="utf-8")
+
+    voice_spec = cache_tools.VoiceSpec(
+        description=description,
+        seed=seed,
+        cfg=args.cfg,
+        steps=args.steps,
+        normalize=not args.no_normalize,
+        model_id=args.model_id,
+    )
+    cache = cache_tools.ChunkCache(outdir / ".cache", enabled=not args.no_cache)
+    mastering = audio_tools.MasteringSettings(target_rms_db=args.target_rms)
+
     demo = app.VoxCPMDemo(model_id=args.model_id, device=args.device, load_denoiser=False)
-    normalize = not args.no_normalize
+    print(f"\nDébut de la narration à {time.strftime('%H:%M:%S')} (device={args.device}). "
+          f"C'est lent sur CPU.\n", flush=True)
 
-    started = time.strftime("%H:%M:%S")
-    print(f"\nStarting narration at {started} (device={args.device}). This is slow on CPU.\n", flush=True)
-
-    for i, _, chunks in plan:
-        out = outdir / f"chapitre_{i:03d}.wav"
+    for index, segments in plan:
+        out = outdir / f"chapitre_{index:03d}.wav"
         if out.is_file() and not args.force:
-            print(f"[chapter {i:03d}/{len(plan)}] exists, skipping -> {out.name}", flush=True)
+            print(f"[chapitre {index:03d}/{len(plan)}] déjà présent, ignoré -> {out.name}", flush=True)
             continue
-        print(f"[chapter {i:03d}/{len(plan)}] {len(chunks)} chunk(s) ...", flush=True)
-        parts: list[np.ndarray] = []
-        sr = None
-        # Continuity: chain each chunk from the immediately previous one only
-        # (bounded window → never overflows the KV cache). Reset per chapter.
-        prev_wav_path: str | None = None
-        prev_text: str | None = None
-        tmp_paths: list[str] = []
+
+        print(f"[chapitre {index:03d}/{len(plan)}] {len(segments)} segment(s) …", flush=True)
+        rendered: list[tuple[np.ndarray, float]] = []
+        sample_rate = None
+        # Continuity chains each segment to the immediately previous one only
+        # (bounded window, so the KV cache never overflows). Reset per chapter.
+        previous_wav_path: str | None = None
+        previous_text: str | None = None
+        previous_key: str | None = None
+        temporaries: list[str] = []
         try:
-            for j, chunk in enumerate(chunks):
-                if args.continuity and prev_wav_path is not None:
-                    # Voice comes from the running audio, so drop the control text.
-                    sr, wav, _ = demo.generate_tts_audio(
-                        text_input=chunk,
+            for position, segment in enumerate(segments):
+                key = cache.key(segment.text, voice_spec, parent=previous_key if args.continuity else None)
+                cached = cache.get(key)
+                if cached is not None:
+                    sample_rate, wav = cached
+                    status = "cache"
+                elif args.continuity and previous_wav_path is not None:
+                    # The voice now comes from the running audio, so the control
+                    # text is dropped.
+                    sample_rate, wav, _ = demo.generate_tts_audio(
+                        text_input=segment.text,
                         control_instruction="",
-                        reference_wav_path_input=prev_wav_path,
-                        prompt_text=prev_text,
+                        reference_wav_path_input=previous_wav_path,
+                        prompt_text=previous_text,
                         cfg_value_input=args.cfg,
-                        do_normalize=normalize,
+                        do_normalize=not args.no_normalize,
                         inference_timesteps=args.steps,
                         seed=seed,
                     )
+                    cache.put(key, sample_rate, wav, text=segment.text)
+                    status = "généré"
                 else:
-                    sr, wav, _ = demo.generate_tts_audio(
-                        text_input=chunk,
+                    sample_rate, wav, _ = demo.generate_tts_audio(
+                        text_input=segment.text,
                         control_instruction=description,
                         cfg_value_input=args.cfg,
-                        do_normalize=normalize,
+                        do_normalize=not args.no_normalize,
                         inference_timesteps=args.steps,
                         seed=seed,
                     )
-                if j > 0:
-                    parts.append(np.zeros(int(sr * args.silence), dtype=wav.dtype))
-                parts.append(wav)
-                if args.continuity:  # stash this chunk as the prompt for the next one
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                        tmp_paths.append(tmp.name)
-                    sf.write(tmp_paths[-1], wav, sr)
-                    prev_wav_path, prev_text = tmp_paths[-1], chunk
-                print(f"    chunk {j + 1}/{len(chunks)} done", flush=True)
+                    cache.put(key, sample_rate, wav, text=segment.text)
+                    status = "généré"
+
+                rendered.append((wav, segment.pause_after))
+                previous_key = key
+                if args.continuity:  # stash this segment as the prompt for the next
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as handle:
+                        temporaries.append(handle.name)
+                    sf.write(temporaries[-1], wav, sample_rate)
+                    previous_wav_path, previous_text = temporaries[-1], segment.text
+                print(f"    segment {position + 1}/{len(segments)} {status}", flush=True)
         finally:
-            for p in tmp_paths:
+            for path in temporaries:
                 try:
-                    os.unlink(p)
+                    os.unlink(path)
                 except OSError:
                     pass
-        book = np.concatenate(parts)
-        sf.write(str(out), book, sr)
-        print(f"[chapter {i:03d}/{len(plan)}] saved -> {out.name} ({len(book) / sr:.1f}s)", flush=True)
 
-    print(f"\nDone. Chapter files are in: {outdir}", flush=True)
-    print("Tip: concatenate them into one file with your audio tool, e.g. ffmpeg concat.", flush=True)
+        if not rendered or sample_rate is None:
+            print(f"[chapitre {index:03d}/{len(plan)}] vide, ignoré", flush=True)
+            continue
+
+        if args.no_master:
+            chapter_audio = audio_tools.concatenate(
+                (wav for wav, _ in rendered), sample_rate, gap_sec=profile.sentence
+            )
+        else:
+            chapter_audio = audio_tools.stitch(rendered, sample_rate, mastering)
+
+        sf.write(str(out), chapter_audio, sample_rate, subtype="PCM_16")
+        report = audio_tools.acx_report(chapter_audio, sample_rate)
+        print(
+            f"[chapitre {index:03d}/{len(plan)}] écrit -> {out.name} "
+            f"({report['duration_sec'] / 60:.1f} min, RMS {report['rms_db']:.1f} dBFS, "
+            f"crête {report['peak_db']:.1f} dBFS)",
+            flush=True,
+        )
+
+    print(f"\nTerminé. Chapitres dans : {outdir}")
+    print(cache.stats.describe())
+
+    # ---- assemble ------------------------------------------------------
+    if args.assemble:
+        chapter_files = sorted(p for p in outdir.glob("chapitre_*.wav"))
+        if not chapter_files:
+            print("Rien à assembler.")
+            return 0
+        target = outdir / f"{outdir.name}_complet.{args.assemble}"
+        print(f"\nAssemblage de {len(chapter_files)} chapitre(s) -> {target.name}")
+        result = assembly.assemble(
+            chapter_files,
+            target,
+            title=args.title or in_path.stem,
+            author=args.author,
+            titles=titles,
+        )
+        print(f"Durée totale : {result.duration_sec / 60:.1f} min")
+        print(result.message)
+        if result.pending_command:
+            import subprocess
+
+            print("À exécuter une fois ffmpeg installé :")
+            print("  " + subprocess.list2cmdline(result.pending_command))
+    else:
+        print("Astuce : ajoutez --assemble m4b pour produire un fichier unique avec chapitres, "
+              "ou lancez scripts/assemble_audiobook.py plus tard.")
     return 0
 
 
