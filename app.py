@@ -6,6 +6,7 @@ import time
 import logging
 import random
 import numpy as np
+import soundfile as sf
 import gradio as gr
 from typing import Any, List, Optional, Tuple
 from pathlib import Path
@@ -19,6 +20,13 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 import voxcpm
 from voxcpm.model.utils import resolve_runtime_device
+
+# Audiobook production chain. These modules depend only on numpy/soundfile, so
+# they stay importable (and testable) without the engine.
+from narration import assemble as assembly
+from narration import audio as audio_tools
+from narration import cache as cache_tools
+from narration import chunking, text_fr
 
 logging.basicConfig(
     level=logging.INFO,
@@ -133,6 +141,30 @@ _EXAMPLES_FOOTER_FR = (
     "J'ai enchaîné les tubes toute la matinée — c'est juste, genre, parfait, tu vois ce que je veux dire ?\"*"
 )
 
+_BOOK_INTRO_EN = (
+    "### 📚 Narrate a whole book\n\n"
+    "Load a `.txt` file, pick a voice in the **Studio** tab, then narrate. Chapters are "
+    "separated by a line containing only `---`.\n\n"
+    "- Every chapter is written to `output/book_<name>/` as it finishes, so nothing is lost "
+    "if you stop midway.\n"
+    "- Every segment is cached: restarting resumes at the segment it stopped on, not at the "
+    "beginning of the chapter.\n"
+    "- **On CPU this is slow** (roughly 40× slower than real time). Narrate a chapter or two "
+    "to check the voice before committing to a whole book."
+)
+
+_BOOK_INTRO_FR = (
+    "### 📚 Narrer un livre entier\n\n"
+    "Chargez un fichier `.txt`, choisissez une voix dans l'onglet **Studio**, puis lancez la "
+    "narration. Les chapitres sont séparés par une ligne contenant uniquement `---`.\n\n"
+    "- Chaque chapitre est écrit dans `output/book_<nom>/` dès qu'il est terminé : rien n'est "
+    "perdu si vous arrêtez en cours de route.\n"
+    "- Chaque segment est mis en cache : relancer reprend au segment interrompu, pas au début "
+    "du chapitre.\n"
+    "- **Sur CPU c'est lent** (environ 40× le temps réel). Narrez un ou deux chapitres pour "
+    "valider la voix avant de lancer un livre entier."
+)
+
 _I18N_TRANSLATIONS = {
     "en": {
         "reference_audio_label": "🎤 Reference Audio (optional — upload for cloning)",
@@ -167,6 +199,30 @@ _I18N_TRANSLATIONS = {
         "chunk_size_label": "Max characters per chunk",
         "chunk_size_info": "Target size of each chunk when splitting long texts (whole sentences are kept together).",
         "load_txt_label": "📄 Load a .txt file",
+        "prepare_text_label": "Prepare French text",
+        "prepare_text_info": "Read numbers, abbreviations and Roman numerals as a narrator would (1789, M. Dupont, XIVe).",
+        "master_label": "Audiobook mastering",
+        "master_info": "Punctuation-aware pauses, trimmed segment edges, click-free joins and one loudness pass.",
+        "tab_studio": "🎙️ Studio",
+        "tab_book": "📚 Audiobook",
+        "book_intro": _BOOK_INTRO_EN,
+        "book_file_label": "📄 Load the book (.txt)",
+        "book_text_label": "Book text — separate chapters with a line containing only ---",
+        "book_title_label": "Book title",
+        "book_author_label": "Author / narrator",
+        "book_plan_btn": "🔍 Analyse without generating",
+        "book_plan_label": "Plan",
+        "book_generate_btn": "📖 Narrate the book",
+        "book_assemble_btn": "📦 Assemble the audiobook",
+        "book_format_label": "Format",
+        "book_status_label": "Progress",
+        "book_audio_label": "Last finished chapter",
+        "book_file_output_label": "Assembled file",
+        "book_settings_title": "⚙️ Narration settings",
+        "book_target_rms_label": "Loudness target (dBFS)",
+        "book_target_rms_info": "Audiobook platforms expect RMS between -23 and -18 dBFS.",
+        "book_pause_sentence_label": "Pause after a sentence (s)",
+        "book_pause_paragraph_label": "Pause after a paragraph (s)",
         "usage_instructions": _USAGE_INSTRUCTIONS_EN,
         "examples_footer": _EXAMPLES_FOOTER_EN,
     },
@@ -203,6 +259,30 @@ _I18N_TRANSLATIONS = {
         "chunk_size_label": "Caractères max par segment",
         "chunk_size_info": "Taille cible de chaque segment lors du découpage (les phrases entières restent groupées).",
         "load_txt_label": "📄 Charger un fichier .txt",
+        "prepare_text_label": "Préparation du texte français",
+        "prepare_text_info": "Fait lire les nombres, abréviations et chiffres romains comme un narrateur (1789, M. Dupont, XIVe).",
+        "master_label": "Mastering livre audio",
+        "master_info": "Pauses selon la ponctuation, bords des segments nettoyés, jointures sans clic et un seul passage de normalisation.",
+        "tab_studio": "🎙️ Studio",
+        "tab_book": "📚 Livre audio",
+        "book_intro": _BOOK_INTRO_FR,
+        "book_file_label": "📄 Charger le livre (.txt)",
+        "book_text_label": "Texte du livre — séparez les chapitres par une ligne contenant seulement ---",
+        "book_title_label": "Titre du livre",
+        "book_author_label": "Auteur / narrateur",
+        "book_plan_btn": "🔍 Analyser sans générer",
+        "book_plan_label": "Plan",
+        "book_generate_btn": "📖 Narrer le livre",
+        "book_assemble_btn": "📦 Assembler le livre audio",
+        "book_format_label": "Format",
+        "book_status_label": "Avancement",
+        "book_audio_label": "Dernier chapitre terminé",
+        "book_file_output_label": "Fichier assemblé",
+        "book_settings_title": "⚙️ Réglages de narration",
+        "book_target_rms_label": "Cible de sonie (dBFS)",
+        "book_target_rms_info": "Les plateformes de livres audio attendent un RMS entre -23 et -18 dBFS.",
+        "book_pause_sentence_label": "Pause après une phrase (s)",
+        "book_pause_paragraph_label": "Pause après un paragraphe (s)",
         "usage_instructions": _USAGE_INSTRUCTIONS_FR,
         "examples_footer": _EXAMPLES_FOOTER_FR,
     },
@@ -375,11 +455,14 @@ def _voice_names_for_lang(lang: Optional[str]) -> List[str]:
     return [v["name"] for v in PRESET_VOICES if lang is None or v["lang"] == lang]
 
 # ---------- Long-text chunking (audiobooks) ----------
-# Split on sentence boundaries so each generated chunk stays a reasonable length,
-# then stitch the audio with a short silence between chunks.
-_CHUNK_MAX_CHARS = 300
-_CHUNK_SILENCE_SEC = 0.3
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?…。！？\n])\s+")
+# Segmentation and the pause plan live in narration.chunking; the audio side
+# (trimming, de-clicking, loudness) lives in narration.audio.
+_CHUNK_MAX_CHARS = chunking.DEFAULT_MAX_CHARS
+_CHUNK_SILENCE_SEC = chunking.PauseProfile().sentence
+
+# Where a book narrated from the UI keeps its chapters and its resume cache.
+_BOOKS_DIR = Path(__file__).parent / "output"
+_LEXICON_PATH = Path(__file__).parent / "conf" / "pronunciation_fr.json"
 
 # Short fixed phrase used to preview a preset voice on demand.
 _PREVIEW_TEXT = "Bonjour, ceci est un aperçu de cette voix pour la narration de votre livre audio."
@@ -410,27 +493,12 @@ def _save_output_wav(wav_np: np.ndarray, sr: int, seed: Optional[int], voice_nam
 
 def _split_text_into_chunks(text: str, max_chars: int = _CHUNK_MAX_CHARS) -> List[str]:
     """Greedily pack whole sentences into chunks no longer than ``max_chars``.
-    A single sentence longer than the limit becomes its own chunk."""
-    text = (text or "").strip()
-    if not text:
-        return []
-    sentences = [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
-    chunks: List[str] = []
-    current = ""
-    for sentence in sentences:
-        if len(sentence) > max_chars:
-            if current:
-                chunks.append(current)
-                current = ""
-            chunks.append(sentence)
-        elif current and len(current) + 1 + len(sentence) > max_chars:
-            chunks.append(current)
-            current = sentence
-        else:
-            current = f"{current} {sentence}" if current else sentence
-    if current:
-        chunks.append(current)
-    return chunks
+
+    Thin wrapper kept for the existing single-shot path and any external caller;
+    the segmentation itself now lives in ``narration.chunking``, alongside the
+    pause plan that long-form narration needs.
+    """
+    return chunking.split_text_into_chunks(text, max_chars)
 
 _CUSTOM_CSS = """
 .logo-container {
@@ -700,12 +768,17 @@ def create_demo_interface(demo: VoxCPMDemo):
         enable_chunking: bool,
         chunk_max_chars: int,
         preset_name: str = "",
+        prepare_text: bool = False,
+        master_audio: bool = True,
         progress=gr.Progress(),
     ):
         actual_prompt_text = prompt_text_value.strip() if use_prompt_text else ""
         actual_control = "" if use_prompt_text else control_instruction
         seed = _coerce_seed(seed_value)
         voice_name = preset_name if preset_name and preset_name != PRESET_CUSTOM_LABEL else "custom"
+
+        if prepare_text:
+            text = text_fr.normalize_french(text, lexicon=text_fr.load_lexicon(_LEXICON_PATH))
 
         common = dict(
             control_instruction=actual_control,
@@ -719,21 +792,29 @@ def create_demo_interface(demo: VoxCPMDemo):
         )
 
         # Only chunk plain Voice Design / control text — cloning modes keep a single pass.
-        chunks = _split_text_into_chunks(text, int(chunk_max_chars)) if enable_chunking else []
-        if len(chunks) <= 1 or ref_wav or actual_prompt_text:
+        segments = (
+            chunking.split_into_segments(text, int(chunk_max_chars)) if enable_chunking else []
+        )
+        if len(segments) <= 1 or ref_wav or actual_prompt_text:
             sr, wav_np, last_successful_seed = demo.generate_tts_audio(text_input=text, **common)
         else:
-            logger.info(f"Chunked synthesis: {len(chunks)} segments.")
+            logger.info(f"Chunked synthesis: {len(segments)} segments.")
             sr = None
-            parts: List[np.ndarray] = []
+            rendered: List[Tuple[np.ndarray, float]] = []
             last_successful_seed = seed
-            for i, chunk in enumerate(progress.tqdm(chunks, desc="Synthèse des segments")):
-                logger.info(f"  segment {i + 1}/{len(chunks)}")
-                sr, wav_chunk, last_successful_seed = demo.generate_tts_audio(text_input=chunk, **common)
-                if i > 0:
-                    parts.append(np.zeros(int(sr * _CHUNK_SILENCE_SEC), dtype=wav_chunk.dtype))
-                parts.append(wav_chunk)
-            wav_np = np.concatenate(parts)
+            for i, segment in enumerate(progress.tqdm(segments, desc="Synthèse des segments")):
+                logger.info(f"  segment {i + 1}/{len(segments)}")
+                sr, wav_chunk, last_successful_seed = demo.generate_tts_audio(
+                    text_input=segment.text, **common
+                )
+                rendered.append((wav_chunk, segment.pause_after))
+            if master_audio:
+                # Punctuation-aware pauses, de-clicked joins, one loudness pass.
+                wav_np = audio_tools.stitch(rendered, sr, audio_tools.MasteringSettings())
+            else:
+                wav_np = audio_tools.concatenate(
+                    (wav for wav, _ in rendered), sr, gap_sec=_CHUNK_SILENCE_SEC
+                )
 
         out_path = _save_output_wav(wav_np, sr, last_successful_seed, voice_name)
         return out_path, last_successful_seed
@@ -763,6 +844,192 @@ def create_demo_interface(demo: VoxCPMDemo):
             except Exception as e:
                 logger.warning(f"Could not cache preview ({e}); returning in-memory audio.")
         return (sr, wav_np)
+
+    # ---------- Audiobook tab ----------
+
+    def _book_dir(title: str) -> Path:
+        """Where a book's chapters and its resume cache live."""
+        return _BOOKS_DIR / f"book_{_sanitize_filename(title or 'livre')}"
+
+    def _book_prepared_chapters(book_text: str, prepare: bool) -> List[str]:
+        chapters = chunking.split_chapters(book_text)
+        if not prepare:
+            return chapters
+        lexicon = text_fr.load_lexicon(_LEXICON_PATH)
+        return [text_fr.normalize_french(chapter, lexicon=lexicon) for chapter in chapters]
+
+    def _book_profile(pause_sentence: float, pause_paragraph: float) -> chunking.PauseProfile:
+        default = chunking.PauseProfile()
+        return chunking.PauseProfile(
+            clause=min(default.clause, float(pause_sentence)),
+            sentence=float(pause_sentence),
+            paragraph=float(pause_paragraph),
+        )
+
+    def _book_plan(book_text, chunk_max_chars_value, prepare, pause_sentence, pause_paragraph):
+        """Show what would be generated, without loading the model."""
+        chapters = _book_prepared_chapters(book_text, prepare)
+        if not chapters:
+            return "*Aucun texte à analyser.*"
+
+        profile = _book_profile(pause_sentence, pause_paragraph)
+        rows, total_segments, total_chars = [], 0, 0
+        for index, chapter in enumerate(chapters, 1):
+            segments = chunking.split_into_segments(chapter, int(chunk_max_chars_value), profile)
+            characters = chunking.total_characters(segments)
+            total_segments += len(segments)
+            total_chars += characters
+            rows.append(f"| {index} | {len(segments)} | {characters} |")
+
+        # ~14 characters of prose per second of finished narration, and roughly
+        # 40x real time to synthesize on CPU — both rough, but the difference
+        # between "an afternoon" and "several days" is worth knowing up front.
+        minutes = total_chars / 14.0 / 60.0
+        preview = ""
+        first = chunking.split_into_segments(chapters[0], int(chunk_max_chars_value), profile)
+        if first:
+            preview = f"\n\n**Premier segment tel qu'il sera lu :**\n\n> {first[0].text}"
+
+        return (
+            f"**{len(chapters)} chapitre(s) · {total_segments} segment(s) · {total_chars} caractères**\n\n"
+            f"Durée de narration estimée : **~{minutes:.0f} min** "
+            f"(soit ~{minutes * 40 / 60:.1f} h de calcul sur CPU)\n\n"
+            "| Chapitre | Segments | Caractères |\n|---|---|---|\n" + "\n".join(rows) + preview
+        )
+
+    def _book_narrate(
+        book_text,
+        title,
+        author,
+        control_instruction,
+        cfg_value,
+        dit_steps,
+        do_normalize,
+        seed_value,
+        chunk_max_chars_value,
+        prepare,
+        target_rms,
+        pause_sentence,
+        pause_paragraph,
+        preset_name,
+        progress=gr.Progress(),
+    ):
+        """Narrate every chapter, writing each one to disk as soon as it is done.
+
+        Yields after each chapter so the UI shows progress on a job that runs for
+        hours, and so a finished chapter is listenable before the book is.
+        """
+        chapters = _book_prepared_chapters(book_text, prepare)
+        if not chapters:
+            raise gr.Error("Aucun texte à narrer. Chargez un fichier .txt ou collez le texte.")
+
+        description = control_instruction or ""
+        if not description.strip():
+            raise gr.Error(
+                "Choisissez d'abord une voix dans l'onglet Studio "
+                "(la description de la voix est vide)."
+            )
+
+        seed = _coerce_seed(seed_value)
+        outdir = _book_dir(title)
+        outdir.mkdir(parents=True, exist_ok=True)
+        profile = _book_profile(pause_sentence, pause_paragraph)
+        mastering = audio_tools.MasteringSettings(target_rms_db=float(target_rms))
+        voice_spec = cache_tools.VoiceSpec(
+            description=description,
+            seed=seed,
+            cfg=float(cfg_value),
+            steps=int(dit_steps),
+            normalize=bool(do_normalize),
+            model_id=demo._model_id,
+        )
+        cache = cache_tools.ChunkCache(outdir / ".cache")
+
+        voice_label = preset_name if preset_name and preset_name != PRESET_CUSTOM_LABEL else "voix personnalisée"
+        lines = [
+            f"### Narration en cours\n",
+            f"Voix : **{voice_label}** · graine `{seed}` · dossier `{outdir.name}`\n",
+        ]
+        last_chapter_path = None
+        yield "\n".join(lines), None
+
+        for index, chapter in enumerate(chapters, 1):
+            out = outdir / f"chapitre_{index:03d}.wav"
+            if out.is_file():
+                lines.append(f"- ⏭️ Chapitre {index}/{len(chapters)} — déjà généré, ignoré")
+                last_chapter_path = str(out)
+                yield "\n".join(lines), last_chapter_path
+                continue
+
+            segments = chunking.split_into_segments(chapter, int(chunk_max_chars_value), profile)
+            if not segments:
+                lines.append(f"- ⚠️ Chapitre {index}/{len(chapters)} — vide, ignoré")
+                yield "\n".join(lines), last_chapter_path
+                continue
+
+            rendered: List[Tuple[np.ndarray, float]] = []
+            sr = None
+            for segment in progress.tqdm(segments, desc=f"Chapitre {index}/{len(chapters)}"):
+                key = cache.key(segment.text, voice_spec)
+                cached = cache.get(key)
+                if cached is not None:
+                    sr, wav_chunk = cached
+                else:
+                    sr, wav_chunk, _ = demo.generate_tts_audio(
+                        text_input=segment.text,
+                        control_instruction=description,
+                        cfg_value_input=cfg_value,
+                        do_normalize=do_normalize,
+                        inference_timesteps=int(dit_steps),
+                        seed=seed,
+                    )
+                    cache.put(key, sr, wav_chunk, text=segment.text)
+                rendered.append((wav_chunk, segment.pause_after))
+
+            chapter_audio = audio_tools.stitch(rendered, sr, mastering)
+            sf.write(str(out), chapter_audio, sr, subtype="PCM_16")
+            report = audio_tools.acx_report(chapter_audio, sr)
+            last_chapter_path = str(out)
+            lines.append(
+                f"- ✅ Chapitre {index}/{len(chapters)} — {report['duration_sec'] / 60:.1f} min, "
+                f"RMS {report['rms_db']:.1f} dBFS → `{out.name}`"
+            )
+            yield "\n".join(lines), last_chapter_path
+
+        lines.append(f"\n**Terminé.** {cache.stats.describe()}")
+        lines.append(f"\nChapitres dans `{outdir}` — utilisez « Assembler » pour un fichier unique.")
+        yield "\n".join(lines), last_chapter_path
+
+    def _book_assemble(title, author, output_format):
+        """Join the generated chapters into one chaptered file."""
+        outdir = _book_dir(title)
+        chapter_files = sorted(outdir.glob("chapitre_*.wav"))
+        if not chapter_files:
+            raise gr.Error(f"Aucun chapitre trouvé dans {outdir}. Lancez d'abord la narration.")
+
+        target = outdir / f"{outdir.name}_complet.{output_format}"
+        result = assembly.assemble(
+            chapter_files,
+            target,
+            title=title or outdir.name,
+            author=author or "",
+        )
+        message = [
+            f"### Assemblage\n",
+            f"- {len(result.chapters)} chapitre(s) · **{result.duration_sec / 60:.1f} min**",
+            f"- {result.message}",
+        ]
+        if result.pending_command:
+            import subprocess
+
+            message.append(
+                "\nffmpeg n'est pas installé. Le WAV complet et les marqueurs de chapitres sont "
+                "prêts ; lancez ensuite :\n\n```\n"
+                + subprocess.list2cmdline(result.pending_command)
+                + "\n```"
+            )
+        delivered = result.output_path or result.wav_path
+        return "\n".join(message), str(delivered)
 
     def _on_toggle_instant(checked):
         """Instant UI toggle — no ASR, no blocking."""
@@ -796,123 +1063,202 @@ def create_demo_interface(demo: VoxCPMDemo):
             "</div>"
         )
 
-        gr.Markdown(I18N("usage_instructions"))
+        with gr.Tabs():
+            with gr.Tab(I18N("tab_studio")):
+                gr.Markdown(I18N("usage_instructions"))
 
-        with gr.Row():
-            with gr.Column():
-                reference_wav = gr.Audio(
-                    sources=["upload", "microphone"],
-                    type="filepath",
-                    label=I18N("reference_audio_label"),
-                )
-                show_prompt_text = gr.Checkbox(
-                    value=False,
-                    label=I18N("show_prompt_text_label"),
-                    info=I18N("show_prompt_text_info"),
-                    elem_classes=["switch-toggle"],
-                )
-                prompt_text = gr.Textbox(
-                    value="",
-                    label=I18N("prompt_text_label"),
-                    placeholder=I18N("prompt_text_placeholder"),
-                    lines=2,
-                    visible=False,
-                )
-                _default_lang = _PRESET_LANGS[0] if _PRESET_LANGS else None
-                preset_lang = gr.Dropdown(
-                    choices=[(_lang_label(c), c) for c in _PRESET_LANGS],
-                    value=_default_lang,
-                    label=I18N("preset_lang_label"),
-                    visible=len(_PRESET_LANGS) > 1,  # only show when there is a choice to make
-                )
-                preset_voice = gr.Dropdown(
-                    choices=[PRESET_CUSTOM_LABEL] + _voice_names_for_lang(_default_lang),
-                    value=PRESET_CUSTOM_LABEL,
-                    label=I18N("preset_voices_label"),
-                    info=I18N("preset_voices_info"),
-                )
-                preview_btn = gr.Button(I18N("preview_btn_label"), size="sm")
-                preview_audio = gr.Audio(label=I18N("preview_btn_label"), visible=False)
-                control_instruction = gr.Textbox(
-                    value="",
-                    label=I18N("control_label"),
-                    placeholder=I18N("control_placeholder"),
-                    lines=2,
-                )
-                text = gr.Textbox(
-                    value=DEFAULT_TARGET_TEXT,
-                    label=I18N("target_text_label"),
-                    lines=3,
-                )
-                load_txt_btn = gr.UploadButton(
-                    I18N("load_txt_label"),
-                    file_types=[".txt"],
-                    size="sm",
-                )
-
-                with gr.Accordion(I18N("advanced_settings_title"), open=False):
-                    DoDenoisePromptAudio = gr.Checkbox(
-                        value=False,
-                        label=I18N("ref_denoise_label"),
-                        elem_classes=["switch-toggle"],
-                        info=I18N("ref_denoise_info"),
-                    )
-                    DoNormalizeText = gr.Checkbox(
-                        value=False,
-                        label=I18N("normalize_label"),
-                        elem_classes=["switch-toggle"],
-                        info=I18N("normalize_info"),
-                    )
-                    enable_chunking = gr.Checkbox(
-                        value=True,
-                        label=I18N("chunking_label"),
-                        elem_classes=["switch-toggle"],
-                        info=I18N("chunking_info"),
-                    )
-                    chunk_max_chars = gr.Slider(
-                        minimum=100,
-                        maximum=600,
-                        value=_CHUNK_MAX_CHARS,
-                        step=20,
-                        label=I18N("chunk_size_label"),
-                        info=I18N("chunk_size_info"),
-                    )
-                    cfg_value = gr.Slider(
-                        minimum=1.0,
-                        maximum=3.0,
-                        value=2.0,
-                        step=0.1,
-                        label=I18N("cfg_label"),
-                        info=I18N("cfg_info"),
-                    )
-                    dit_steps = gr.Slider(
-                        minimum=1,
-                        maximum=50,
-                        value=10,
-                        step=1,
-                        label=I18N("dit_steps_label"),
-                        info=I18N("dit_steps_info"),
-                    )
-                    with gr.Row():
-                        seed_value = gr.Number(
-                            value=random.randint(0, 2**32 - 1),
-                            precision=0,
-                            label=I18N("seed_label"),
-                            info=I18N("seed_info"),
-                            interactive=False,
+                with gr.Row():
+                    with gr.Column():
+                        reference_wav = gr.Audio(
+                            sources=["upload", "microphone"],
+                            type="filepath",
+                            label=I18N("reference_audio_label"),
                         )
-                        random_seed = gr.Checkbox(
-                            value=True,
-                            label=I18N("random_seed_label"),
+                        show_prompt_text = gr.Checkbox(
+                            value=False,
+                            label=I18N("show_prompt_text_label"),
+                            info=I18N("show_prompt_text_info"),
                             elem_classes=["switch-toggle"],
-                            info=I18N("random_seed_info"),
+                        )
+                        prompt_text = gr.Textbox(
+                            value="",
+                            label=I18N("prompt_text_label"),
+                            placeholder=I18N("prompt_text_placeholder"),
+                            lines=2,
+                            visible=False,
+                        )
+                        _default_lang = _PRESET_LANGS[0] if _PRESET_LANGS else None
+                        preset_lang = gr.Dropdown(
+                            choices=[(_lang_label(c), c) for c in _PRESET_LANGS],
+                            value=_default_lang,
+                            label=I18N("preset_lang_label"),
+                            visible=len(_PRESET_LANGS) > 1,  # only show when there is a choice to make
+                        )
+                        preset_voice = gr.Dropdown(
+                            choices=[PRESET_CUSTOM_LABEL] + _voice_names_for_lang(_default_lang),
+                            value=PRESET_CUSTOM_LABEL,
+                            label=I18N("preset_voices_label"),
+                            info=I18N("preset_voices_info"),
+                        )
+                        preview_btn = gr.Button(I18N("preview_btn_label"), size="sm")
+                        preview_audio = gr.Audio(label=I18N("preview_btn_label"), visible=False)
+                        control_instruction = gr.Textbox(
+                            value="",
+                            label=I18N("control_label"),
+                            placeholder=I18N("control_placeholder"),
+                            lines=2,
+                        )
+                        text = gr.Textbox(
+                            value=DEFAULT_TARGET_TEXT,
+                            label=I18N("target_text_label"),
+                            lines=3,
+                        )
+                        load_txt_btn = gr.UploadButton(
+                            I18N("load_txt_label"),
+                            file_types=[".txt"],
+                            size="sm",
                         )
 
-                run_btn = gr.Button(I18N("generate_btn"), variant="primary", size="lg")
+                        with gr.Accordion(I18N("advanced_settings_title"), open=False):
+                            DoDenoisePromptAudio = gr.Checkbox(
+                                value=False,
+                                label=I18N("ref_denoise_label"),
+                                elem_classes=["switch-toggle"],
+                                info=I18N("ref_denoise_info"),
+                            )
+                            DoNormalizeText = gr.Checkbox(
+                                value=False,
+                                label=I18N("normalize_label"),
+                                elem_classes=["switch-toggle"],
+                                info=I18N("normalize_info"),
+                            )
+                            prepare_text = gr.Checkbox(
+                                value=False,
+                                label=I18N("prepare_text_label"),
+                                elem_classes=["switch-toggle"],
+                                info=I18N("prepare_text_info"),
+                            )
+                            master_audio = gr.Checkbox(
+                                value=True,
+                                label=I18N("master_label"),
+                                elem_classes=["switch-toggle"],
+                                info=I18N("master_info"),
+                            )
+                            enable_chunking = gr.Checkbox(
+                                value=True,
+                                label=I18N("chunking_label"),
+                                elem_classes=["switch-toggle"],
+                                info=I18N("chunking_info"),
+                            )
+                            chunk_max_chars = gr.Slider(
+                                minimum=100,
+                                maximum=600,
+                                value=_CHUNK_MAX_CHARS,
+                                step=20,
+                                label=I18N("chunk_size_label"),
+                                info=I18N("chunk_size_info"),
+                            )
+                            cfg_value = gr.Slider(
+                                minimum=1.0,
+                                maximum=3.0,
+                                value=2.0,
+                                step=0.1,
+                                label=I18N("cfg_label"),
+                                info=I18N("cfg_info"),
+                            )
+                            dit_steps = gr.Slider(
+                                minimum=1,
+                                maximum=50,
+                                value=10,
+                                step=1,
+                                label=I18N("dit_steps_label"),
+                                info=I18N("dit_steps_info"),
+                            )
+                            with gr.Row():
+                                seed_value = gr.Number(
+                                    value=random.randint(0, 2**32 - 1),
+                                    precision=0,
+                                    label=I18N("seed_label"),
+                                    info=I18N("seed_info"),
+                                    interactive=False,
+                                )
+                                random_seed = gr.Checkbox(
+                                    value=True,
+                                    label=I18N("random_seed_label"),
+                                    elem_classes=["switch-toggle"],
+                                    info=I18N("random_seed_info"),
+                                )
 
-            with gr.Column():
-                audio_output = gr.Audio(label=I18N("generated_audio_label"))
-                gr.Markdown(I18N("examples_footer"))
+                        run_btn = gr.Button(I18N("generate_btn"), variant="primary", size="lg")
+
+                    with gr.Column():
+                        audio_output = gr.Audio(label=I18N("generated_audio_label"))
+                        gr.Markdown(I18N("examples_footer"))
+
+            with gr.Tab(I18N("tab_book")):
+                gr.Markdown(I18N("book_intro"))
+
+                with gr.Row():
+                    with gr.Column():
+                        book_upload = gr.UploadButton(
+                            I18N("book_file_label"), file_types=[".txt"], size="sm"
+                        )
+                        book_text = gr.Textbox(
+                            value="",
+                            label=I18N("book_text_label"),
+                            lines=14,
+                            placeholder="Chapitre premier…\n\n---\n\nChapitre deux…",
+                        )
+                        with gr.Row():
+                            book_title = gr.Textbox(value="", label=I18N("book_title_label"))
+                            book_author = gr.Textbox(value="", label=I18N("book_author_label"))
+
+                        with gr.Accordion(I18N("book_settings_title"), open=False):
+                            book_prepare = gr.Checkbox(
+                                value=True,
+                                label=I18N("prepare_text_label"),
+                                info=I18N("prepare_text_info"),
+                                elem_classes=["switch-toggle"],
+                            )
+                            book_target_rms = gr.Slider(
+                                minimum=-30.0,
+                                maximum=-12.0,
+                                value=audio_tools.MasteringSettings().target_rms_db,
+                                step=0.5,
+                                label=I18N("book_target_rms_label"),
+                                info=I18N("book_target_rms_info"),
+                            )
+                            book_pause_sentence = gr.Slider(
+                                minimum=0.0,
+                                maximum=2.0,
+                                value=chunking.PauseProfile().sentence,
+                                step=0.05,
+                                label=I18N("book_pause_sentence_label"),
+                            )
+                            book_pause_paragraph = gr.Slider(
+                                minimum=0.0,
+                                maximum=3.0,
+                                value=chunking.PauseProfile().paragraph,
+                                step=0.05,
+                                label=I18N("book_pause_paragraph_label"),
+                            )
+
+                        with gr.Row():
+                            book_plan_btn = gr.Button(I18N("book_plan_btn"), size="sm")
+                            book_run_btn = gr.Button(I18N("book_generate_btn"), variant="primary")
+
+                    with gr.Column():
+                        book_status = gr.Markdown(value="")
+                        book_audio = gr.Audio(label=I18N("book_audio_label"))
+                        with gr.Row():
+                            book_format = gr.Dropdown(
+                                choices=["m4b", "mp3", "wav"],
+                                value="m4b",
+                                label=I18N("book_format_label"),
+                                scale=1,
+                            )
+                            book_assemble_btn = gr.Button(I18N("book_assemble_btn"), scale=2)
+                        book_output_file = gr.File(label=I18N("book_file_output_label"))
 
         show_prompt_text.change(
             fn=_on_toggle_instant,
@@ -987,10 +1333,63 @@ def create_demo_interface(demo: VoxCPMDemo):
                 enable_chunking,
                 chunk_max_chars,
                 preset_voice,
+                prepare_text,
+                master_audio,
             ],
             outputs=[audio_output, seed_value],
             show_progress=True,
             api_name="generate",
+        )
+
+        book_upload.upload(
+            fn=_load_text_file,
+            inputs=[book_upload],
+            outputs=[book_text],
+        )
+
+        book_plan_btn.click(
+            fn=_book_plan,
+            inputs=[book_text, chunk_max_chars, book_prepare, book_pause_sentence, book_pause_paragraph],
+            outputs=[book_status],
+            show_progress=False,
+        )
+
+        # The voice comes from the Studio tab, so the seed is settled the same
+        # way as for a single generation before narration starts.
+        book_run_btn.click(
+            fn=_prepare_seed,
+            inputs=[random_seed, seed_value],
+            outputs=[seed_value],
+            show_progress=False,
+        ).then(
+            fn=_book_narrate,
+            inputs=[
+                book_text,
+                book_title,
+                book_author,
+                control_instruction,
+                cfg_value,
+                dit_steps,
+                DoNormalizeText,
+                seed_value,
+                chunk_max_chars,
+                book_prepare,
+                book_target_rms,
+                book_pause_sentence,
+                book_pause_paragraph,
+                preset_voice,
+            ],
+            outputs=[book_status, book_audio],
+            show_progress=True,
+            api_name="narrate_book",
+        )
+
+        book_assemble_btn.click(
+            fn=_book_assemble,
+            inputs=[book_title, book_author, book_format],
+            outputs=[book_status, book_output_file],
+            show_progress=True,
+            api_name="assemble_book",
         )
 
     return interface
