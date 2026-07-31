@@ -47,6 +47,7 @@ Examples
   ./.venv/Scripts/python.exe scripts/narrate_book.py livre.txt --voice "..." --device cuda
 """
 import argparse
+import dataclasses
 import json
 import os
 import subprocess
@@ -65,7 +66,7 @@ import app  # noqa: E402
 from narration import assemble as assembly  # noqa: E402
 from narration import audio as audio_tools  # noqa: E402
 from narration import cache as cache_tools  # noqa: E402
-from narration import chunking, credits, epub, quality, text_fr  # noqa: E402
+from narration import chunking, credits, epub, quality, repair, text_fr  # noqa: E402
 
 #: Rough characters-per-second of finished narration, used only to estimate how
 #: long a book will run before committing hours of CPU to it.
@@ -294,6 +295,27 @@ def main() -> int:
     )
     cache = cache_tools.ChunkCache(outdir / ".cache", enabled=not args.no_cache)
     mastering = audio_tools.MasteringSettings(target_rms_db=args.target_rms)
+
+    # The plan is what makes a later repair possible: without it, which cache
+    # entry holds which sentence is lost the moment this run ends. Written
+    # before any audio, so a narration interrupted after nine hours is still
+    # repairable — which is exactly the narration worth repairing rather than
+    # running again.
+    repair.BookPlan(
+        voice=dataclasses.asdict(voice_spec),
+        mastering=dataclasses.asdict(mastering),
+        chapters=tuple(
+            repair.PlannedChapter(
+                index=index,
+                title=titles[index - 1],
+                segments=tuple(
+                    repair.PlannedSegment(segment.text, segment.pause_after)
+                    for segment in segments
+                ),
+            )
+            for index, segments in plan
+        ),
+    ).save(outdir)
 
     qc = not args.no_qc
     thresholds = quality.QualityThresholds()

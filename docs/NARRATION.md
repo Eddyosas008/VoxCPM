@@ -339,6 +339,27 @@ sur la première syllabe**. La norme porte aussi sur la forme du fichier :
 valeurs par défaut visent le **milieu** de chaque fenêtre, pas son bord : un
 chapitre reste conforme même si le rognage laisse un peu de silence à lui.
 
+## Réparer un segment sans renarrer le livre
+
+Un livre, c'est des heures de calcul. Quand **une** phrase sort tronquée ou
+bafouillée, tout régénérer — même seulement son chapitre — est absurde : le reste
+était bon, et le cache le contient encore.
+
+```
+.\.venv\Scripts\python.exe scripts\repair_segment.py output\book_mon_livre --list
+.\.venv\Scripts\python.exe scripts\repair_segment.py output\book_mon_livre --segment ch003/seg012
+```
+
+`--list` lit le cache et **ne charge pas le modèle** : savoir ce qui cloche ne doit
+pas coûter une minute d'attente. `--all-fatal` répare d'un coup tout ce qui est
+fatalement défectueux. Une nouvelle prise moins bonne que l'ancienne est **refusée**
+et signalée — relancer la commande en tire une autre.
+
+Cela repose sur le `plan.json` écrit à côté des chapitres, qui mémorise quelle
+entrée du cache contient quelle phrase. Un livre narré avant que ce fichier existe
+se rattrape en relançant `narrate_book.py` avec les mêmes arguments : tout vient du
+cache, donc **c'est affaire de secondes** (mesuré : 23 s sur un livre déjà narré).
+
 ## Assemblage en un fichier unique
 
 ```
