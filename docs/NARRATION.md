@@ -23,6 +23,7 @@ chacune dans un module de `narration/` — testable et utilisable indépendammen
 
 | Étape | Module | Ce qu'elle fait |
 |---|---|---|
+| **0. Lecture** | `narration/epub.py` | Lit un `.epub` dans l'ordre du *spine* et en tire des chapitres titrés — un `.txt` se découpe lui sur les lignes `---` |
 | **1. Préparation** | `narration/text_fr.py` | Réécrit le texte tel qu'un narrateur le dirait : `1789` → « mille sept cent quatre-vingt-neuf », `M. Dupont` → « Monsieur Dupont », `XIVe siècle` → « quatorzième siècle », `14h30`, `1 250 €`, `3,5 %`… |
 | **2. Découpage** | `narration/chunking.py` | Coupe en segments sous la limite du moteur, **sans jamais couper une phrase**, et décide la durée du silence après chaque segment selon la ponctuation |
 | **3. Synthèse** | moteur VoxCPM2 | Même seed partout → voix identique du début à la fin |
@@ -71,7 +72,8 @@ lancer l'app (ou export sous bash).
    `assets/voice_previews/`. C'est cette liste qui détermine la voix du livre.
    Pour une voix sur mesure, laisse-la sur **« Personnalisé / manuel »** et décris
    la voix dans l'onglet **🎙️ Studio**.
-2. Charge ton `.txt` ou colle le texte.
+2. Charge ton `.txt` **ou ton `.epub`**, ou colle le texte. Un EPUB remplit aussi
+   le titre et l'auteur, qui serviront de métadonnées au fichier assemblé.
 3. Clique **« 🔍 Analyser sans générer »** : tu vois le nombre de chapitres, de
    segments, la durée estimée, et **le premier segment tel qu'il sera réellement lu**
    (après préparation du texte). C'est le moment de repérer un nombre ou une
@@ -117,6 +119,46 @@ Deux options utiles dans les **Réglages avancés** :
 
 - **Préparation du texte français** — applique l'étape 1 de la chaîne.
 - **Mastering livre audio** — applique l'étape 4 (activé par défaut).
+
+## Partir d'un EPUB
+
+Un `.epub` se charge directement, dans l'onglet **📚 Livre audio** comme en ligne de
+commande :
+
+```
+.\.venv\Scripts\python.exe scripts\narrate_book.py livre.epub --voice "Narrateur profond & calme" --dry-run
+```
+
+Ce qui en est tiré :
+
+- **L'ordre de lecture vient du *spine***, jamais du nom des fichiers — sinon le
+  chapitre 10 passerait avant le 2.
+- **Les titres viennent de la table des matières du livre** (nav EPUB 3 ou NCX
+  EPUB 2), à défaut du premier titre du document. Ce sont eux qui deviennent les
+  marqueurs de chapitres du M4B.
+- **Les fichiers contenant plusieurs chapitres sont recoupés sur leurs titres.**
+  Beaucoup de livres — ceux du projet Gutenberg notamment — sont découpés en
+  fichiers de taille fixe : sans ce recoupage, *Autour de la Lune* donnerait
+  6 énormes chapitres au lieu de ses 25 vrais. `--no-epub-split` désactive.
+- **Les pages de garde sont écartées** en dessous de `--epub-min-chars`
+  caractères (140 par défaut) — une couverture n'est pas un chapitre.
+- **Un EPUB protégé par DRM est refusé** avec un message clair, plutôt que narré
+  en bruit binaire.
+
+Trois limites à connaître :
+
+- Une **table des matières éditoriale** présente dans le corps du livre est
+  importée comme le reste du texte. Elle apparaît dans le plan avant génération :
+  supprime-la de la zone de texte.
+- Un livre **entièrement contenu dans un seul fichier** reste un seul chapitre :
+  avec un seul document, rien ne permet de distinguer un titre de livre au-dessus
+  de ses chapitres d'un chapitre au-dessus de ses scènes. Insère des `---` pour
+  découper toi-même.
+- Un livre **scanné** (images seules, sans texte) est refusé : il n'y a rien à
+  lire. Il faut passer par une reconnaissance de caractères d'abord.
+
+Le texte importé reste **modifiable dans la zone de texte** avant génération : ce
+qui est narré est ce que tu y vois, `---` compris.
 
 ## Reprise après interruption
 

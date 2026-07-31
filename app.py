@@ -27,6 +27,7 @@ from voxcpm.model.utils import resolve_runtime_device
 from narration import assemble as assembly
 from narration import audio as audio_tools
 from narration import cache as cache_tools
+from narration import epub as epub_reader
 from narration import chunking, quality, repair, text_fr
 
 logging.basicConfig(
@@ -199,7 +200,7 @@ _I18N_TRANSLATIONS = {
         "chunking_info": "Automatically split long texts into sentence chunks and stitch the audio together.",
         "chunk_size_label": "Max characters per chunk",
         "chunk_size_info": "Target size of each chunk when splitting long texts (whole sentences are kept together).",
-        "load_txt_label": "📄 Load a .txt file",
+        "load_txt_label": "📄 Load a .txt or .epub file",
         "prepare_text_label": "Prepare French text",
         "prepare_text_info": "Read numbers, abbreviations and Roman numerals as a narrator would (1789, M. Dupont, XIVe).",
         "master_label": "Audiobook mastering",
@@ -207,7 +208,10 @@ _I18N_TRANSLATIONS = {
         "tab_studio": "🎙️ Studio",
         "tab_book": "📚 Audiobook",
         "book_intro": _BOOK_INTRO_EN,
-        "book_file_label": "📄 Load the book (.txt)",
+        "book_file_label": "📄 Load the book (.txt or .epub)",
+        "book_epub_loaded": "**{chapters} chapter(s) imported** from « {title} »{author}. "
+                            "Check the text below — front matter and a publisher's table of "
+                            "contents are imported like anything else, and are yours to delete.",
         "book_text_label": "Book text — separate chapters with a line containing only ---",
         "book_title_label": "Book title",
         "book_author_label": "Author / narrator",
@@ -268,7 +272,7 @@ _I18N_TRANSLATIONS = {
         "chunking_info": "Découpe automatiquement les longs textes en segments de phrases et assemble l'audio.",
         "chunk_size_label": "Caractères max par segment",
         "chunk_size_info": "Taille cible de chaque segment lors du découpage (les phrases entières restent groupées).",
-        "load_txt_label": "📄 Charger un fichier .txt",
+        "load_txt_label": "📄 Charger un fichier .txt ou .epub",
         "prepare_text_label": "Préparation du texte français",
         "prepare_text_info": "Fait lire les nombres, abréviations et chiffres romains comme un narrateur (1789, M. Dupont, XIVe).",
         "master_label": "Mastering livre audio",
@@ -276,7 +280,11 @@ _I18N_TRANSLATIONS = {
         "tab_studio": "🎙️ Studio",
         "tab_book": "📚 Livre audio",
         "book_intro": _BOOK_INTRO_FR,
-        "book_file_label": "📄 Charger le livre (.txt)",
+        "book_file_label": "📄 Charger le livre (.txt ou .epub)",
+        "book_epub_loaded": "**{chapters} chapitre(s) importé(s)** depuis « {title} »{author}. "
+                            "Vérifiez le texte ci-dessous : les pages de garde et une table des "
+                            "matières éditoriale sont importées comme le reste, à vous de les "
+                            "supprimer.",
         "book_text_label": "Texte du livre — séparez les chapitres par une ligne contenant seulement ---",
         "book_title_label": "Titre du livre",
         "book_author_label": "Auteur / narrateur",
@@ -803,17 +811,55 @@ def create_demo_interface(demo: VoxCPMDemo):
             gr.update(value=preset["normalize"]),               # DoNormalizeText
         )
 
+    def _read_uploaded_text(file_path: str) -> Tuple[str, Optional[epub_reader.EpubBook]]:
+        """Text of an uploaded .txt or .epub, plus the book when there was one."""
+        if epub_reader.is_epub(file_path):
+            text, book = epub_reader.load_book_text(file_path)
+            logger.info(
+                f"Loaded EPUB '{book.title}' — {len(book.chapters)} chapter(s), "
+                f"{book.characters} chars from {file_path}"
+            )
+            return text, book
+        return Path(file_path).read_text(encoding="utf-8").strip(), None
+
     def _load_text_file(file_path: Optional[str]) -> str:
-        """Read a .txt file and return its contents to fill the target text box."""
+        """Read a .txt or .epub file and return its text to fill a text box."""
         if not file_path:
             return gr.update()
         try:
-            content = Path(file_path).read_text(encoding="utf-8").strip()
+            content, _ = _read_uploaded_text(file_path)
             logger.info(f"Loaded text file ({len(content)} chars) from {file_path}")
             return content
         except Exception as e:
             logger.warning(f"Could not read text file {file_path}: {e}")
             raise gr.Error(f"Impossible de lire le fichier : {e}")
+
+    def _load_book_file(file_path: Optional[str]):
+        """Fill the book tab from an upload — text, and an EPUB's own metadata.
+
+        Title and author are only overwritten when the file carries them, so an
+        EPUB with empty metadata never wipes what the user typed.
+        """
+        if not file_path:
+            return gr.update(), gr.update(), gr.update(), gr.update()
+        try:
+            content, book = _read_uploaded_text(file_path)
+        except Exception as e:
+            logger.warning(f"Could not read book file {file_path}: {e}")
+            raise gr.Error(f"Impossible de lire le fichier : {e}")
+
+        if book is None:
+            return content, gr.update(), gr.update(), gr.update()
+        return (
+            content,
+            book.title or gr.update(),
+            book.author or gr.update(),
+            I18N("book_epub_loaded").format(
+                chapters=len(book.chapters),
+                title=book.title or Path(file_path).stem,
+                author=f" — {book.author}" if book.author else "",
+            ),
+        )
 
     def _generate(
         text: str,
@@ -1369,7 +1415,7 @@ def create_demo_interface(demo: VoxCPMDemo):
                         )
                         load_txt_btn = gr.UploadButton(
                             I18N("load_txt_label"),
-                            file_types=[".txt"],
+                            file_types=[".txt", ".epub"],
                             size="sm",
                         )
 
@@ -1455,7 +1501,7 @@ def create_demo_interface(demo: VoxCPMDemo):
                 with gr.Row():
                     with gr.Column():
                         book_upload = gr.UploadButton(
-                            I18N("book_file_label"), file_types=[".txt"], size="sm"
+                            I18N("book_file_label"), file_types=[".txt", ".epub"], size="sm"
                         )
                         book_text = gr.Textbox(
                             value="",
@@ -1645,9 +1691,9 @@ def create_demo_interface(demo: VoxCPMDemo):
         )
 
         book_upload.upload(
-            fn=_load_text_file,
+            fn=_load_book_file,
             inputs=[book_upload],
-            outputs=[book_text],
+            outputs=[book_text, book_title, book_author, book_status],
         )
 
         book_plan_btn.click(

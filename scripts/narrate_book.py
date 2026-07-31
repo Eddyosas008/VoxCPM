@@ -6,6 +6,9 @@ and holding the whole audio in memory is wasteful.
 
 The pipeline
 ------------
+0. **Read** — a ``.txt`` splits into chapters on lines containing only ``---``;
+   an ``.epub`` is read in spine order, chapters and their titles taken from the
+   book's own table of contents (``--no-epub-split``, ``--epub-min-chars``).
 1. **Prepare** — the text goes through the French normalizer, so ``1789``,
    ``M. Dupont``, ``XIVe siècle`` and ``14h30`` are read as a narrator would say
    them (``--no-text-prep`` to disable, ``--lexicon`` for your own proper nouns).
@@ -37,6 +40,9 @@ Examples
   # Custom voice (description + seed):
   ./.venv/Scripts/python.exe scripts/narrate_book.py livre.txt --description "Voix ..." --seed 123
 
+  # Straight from an EPUB (chapters and titles come from the book):
+  ./.venv/Scripts/python.exe scripts/narrate_book.py livre.epub --voice "Narrateur profond & calme" --dry-run
+
   # On a CUDA GPU (far faster):
   ./.venv/Scripts/python.exe scripts/narrate_book.py livre.txt --voice "..." --device cuda
 """
@@ -58,7 +64,7 @@ import app  # noqa: E402
 from narration import assemble as assembly  # noqa: E402
 from narration import audio as audio_tools  # noqa: E402
 from narration import cache as cache_tools  # noqa: E402
-from narration import chunking, quality, text_fr  # noqa: E402
+from narration import chunking, epub, quality, text_fr  # noqa: E402
 
 #: Rough characters-per-second of finished narration, used only to estimate how
 #: long a book will run before committing hours of CPU to it.
@@ -89,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("input", help="Path to the .txt file to narrate")
+    parser.add_argument("input", help="Path to the .txt or .epub file to narrate")
 
     voice = parser.add_argument_group("voix")
     voice.add_argument("--voice", help="Preset voice name (see conf/preset_voices.json)")
@@ -105,6 +111,12 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Pronunciation lexicon JSON (default: conf/pronunciation_fr.json)")
     text.add_argument("--no-normalize", action="store_true", help="Disable the engine's own text normalization")
     text.add_argument("--chapter-regex", help="Regex (MULTILINE) that separates chapters (default: '^---$')")
+    text.add_argument("--epub-min-chars", type=int, default=epub.DEFAULT_MIN_CHARS,
+                      help="EPUB: below this many characters a document is front matter, "
+                           f"not a chapter (default: {epub.DEFAULT_MIN_CHARS})")
+    text.add_argument("--no-epub-split", action="store_true",
+                      help="EPUB: keep one chapter per file instead of cutting files that "
+                           "hold several chapters at their headings")
     text.add_argument("--chunk-max-chars", type=int, default=chunking.DEFAULT_MAX_CHARS,
                       help=f"Max characters per segment (default: {chunking.DEFAULT_MAX_CHARS})")
 
@@ -159,7 +171,19 @@ def main() -> int:
     in_path = Path(args.input)
     if not in_path.is_file():
         raise SystemExit(f"Input file not found: {in_path}")
-    raw_text = in_path.read_text(encoding="utf-8").strip()
+    if epub.is_epub(in_path):
+        try:
+            raw_text, book = epub.load_book_text(
+                in_path,
+                min_chars=args.epub_min_chars,
+                split_on_headings=not args.no_epub_split,
+            )
+        except epub.EpubError as error:
+            raise SystemExit(str(error))
+        print(epub.summarize(book))
+        print()
+    else:
+        raw_text = in_path.read_text(encoding="utf-8").strip()
     if not raw_text:
         raise SystemExit(f"Input file is empty: {in_path}")
 

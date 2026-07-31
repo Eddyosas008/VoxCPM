@@ -8,6 +8,7 @@ matters a lot on a CPU-only machine where model load alone takes minutes.
 
 Stages, in pipeline order::
 
+    epub       read an .epub into the plain chapters everything else expects
     text_fr    prepare raw French prose for a TTS engine
     chunking   cut prepared text into engine-sized segments + pause plan
     cache      content-addressed store so an interrupted run resumes per chunk
@@ -17,4 +18,13 @@ Stages, in pipeline order::
     assemble   join chapters into a single MP3/M4B with chapter markers
 """
 
-__all__ = ["assemble", "audio", "cache", "chunking", "quality", "repair", "text_fr"]
+__all__ = [
+    "assemble",
+    "audio",
+    "cache",
+    "chunking",
+    "epub",
+    "quality",
+    "repair",
+    "text_fr",
+]
