@@ -1,0 +1,13 @@
+{
+  "_comment": "Lexique de prononciation. Clé = ce qui est écrit dans le texte, valeur = ce qui doit être prononcé. Le remplacement est insensible à la casse et ne s'applique qu'à des mots entiers. Les clés commençant par _ sont ignorées (commentaires). Utile surtout pour les noms propres, les sigles et les mots étrangers d'un livre donné.",
+  "_exemple_sigles": "--- sigles lus lettre par lettre ---",
+  "SNCF": "S N C F",
+  "RATP": "R A T P",
+  "ONU": "O N U",
+  "URSS": "U R S S",
+  "_exemple_etrangers": "--- mots étrangers ---",
+  "Wi-Fi": "wifi",
+  "email": "i-mail",
+  "_exemple_noms": "--- noms propres à adapter à votre livre ---",
+  "Nietzsche": "Nitche"
+}
