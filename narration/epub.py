@@ -37,7 +37,7 @@ from __future__ import annotations
 import posixpath
 import re
 import zipfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -87,6 +87,22 @@ _BLANK_LINES_RE = re.compile(r"\n{3,}")
 # any the book itself contains has to stop looking like one.
 _CHAPTER_SEPARATOR_RE = re.compile(r"(?m)^\s*---\s*$")
 
+# The lines Project Gutenberg wraps every work in. Part of the format, hence an
+# exact match rather than a guess; "THIS" is the spelling of older files.
+_GUTENBERG_START_RE = re.compile(
+    r"(?im)^[^\S\n]*\*\*\*[^\S\n]*START OF (?:THE|THIS) PROJECT GUTENBERG EBOOK.*$"
+)
+_GUTENBERG_END_RE = re.compile(
+    r"(?im)^[^\S\n]*\*\*\*[^\S\n]*END OF (?:THE|THIS) PROJECT GUTENBERG EBOOK.*$"
+)
+
+_PUNCTUATION_RE = re.compile(r"[^\w\s]", re.UNICODE)
+#: A contents page is recognised by most of its lines being chapter titles.
+#: Short enough to catch a slim book's contents, long enough that no ordinary
+#: chapter reaches the threshold by accident.
+_CONTENTS_MIN_LINES = 5
+_CONTENTS_RATIO = 0.6
+
 
 class EpubError(ValueError):
     """The file is not an EPUB we can read, and the reason is worth showing."""
@@ -119,6 +135,9 @@ class EpubBook:
     chapters: List[EpubChapter]
     #: Documents dropped as front matter, kept so the caller can say so.
     skipped: List[str]
+    #: Human-readable note per passage removed as boilerplate. Never silent:
+    #: text taken out of a book has to be reported back to whoever imported it.
+    removed: List[str] = field(default_factory=list)
 
     @property
     def characters(self) -> int:
@@ -527,6 +546,125 @@ def _merge_short_sections(
     return merged
 
 
+def _strip_gutenberg(
+    chapters: List[EpubChapter],
+) -> Tuple[List[EpubChapter], List[str]]:
+    """Remove the Project Gutenberg header and licence around the actual book.
+
+    Every Gutenberg book opens on an English notice and closes on the full
+    licence — around 17,000 characters of legalese, some twenty minutes of
+    narration, in the wrong language, at the end of a French audiobook. Worse on
+    a CPU, where those minutes cost hours of synthesis.
+
+    The two ``*** START OF THE PROJECT GUTENBERG EBOOK … ***`` and ``*** END OF
+    … ***`` lines delimit the work exactly — they are part of the format, not a
+    guess — so the cut is made on them and on nothing else. A book carrying
+    neither marker is returned untouched.
+    """
+    start_at: Optional[Tuple[int, int]] = None  # (chapter index, end of match)
+    end_at: Optional[Tuple[int, int]] = None  # (chapter index, start of match)
+    for index, chapter in enumerate(chapters):
+        if start_at is None:
+            match = _GUTENBERG_START_RE.search(chapter.text)
+            if match:
+                start_at = (index, match.end())
+        match = _GUTENBERG_END_RE.search(chapter.text)
+        if match:
+            end_at = (index, match.start())
+            break
+    if start_at is None and end_at is None:
+        return chapters, []
+
+    removed: List[str] = []
+    kept = list(chapters)
+
+    if end_at is not None:
+        index, position = end_at
+        for dropped in kept[index + 1:]:
+            removed.append(f"« {dropped.title} » (licence Project Gutenberg)")
+        kept = kept[: index + 1]
+        tail = len(kept[index].text) - position
+        kept[index] = replace(kept[index], text=kept[index].text[:position].strip())
+        if tail > 0:
+            removed.append(
+                f"fin de « {kept[index].title} » : {tail} caractères de licence "
+                "Project Gutenberg"
+            )
+
+    if start_at is not None:
+        index, position = start_at
+        for dropped in kept[:index]:
+            removed.append(f"« {dropped.title} » (en-tête Project Gutenberg)")
+        kept = kept[index:]
+        if position > 0:
+            body = kept[0].text[position:].strip()
+            if not body:
+                # The whole chapter was the notice.
+                removed.append(f"« {kept[0].title} » (en-tête Project Gutenberg)")
+                kept = kept[1:]
+            else:
+                removed.append(
+                    f"début de « {kept[0].title} » : {position} caractères d'en-tête "
+                    "Project Gutenberg"
+                )
+                # Its title came from a heading inside the notice just removed,
+                # so it now names something the listener will never hear. What
+                # is left opens on the book's own title page: take that.
+                opening = body.split("\n", 1)[0].strip()
+                kept[0] = replace(
+                    kept[0],
+                    text=body,
+                    title=opening[:120] or kept[0].title,
+                    titled=bool(opening),
+                )
+
+    surviving = [chapter for chapter in kept if chapter.text]
+    for empty in (chapter for chapter in kept if not chapter.text):
+        removed.append(f"« {empty.title} » (vide après nettoyage)")
+    return surviving, removed
+
+
+def _toc_key(text: str) -> str:
+    """Comparable form of a line: no punctuation, no case, single spaces.
+
+    A contents page and the heading it points at rarely agree on punctuation —
+    ``CHAPITRE II`` against ``CHAPITRE II.`` — and always agree on the words.
+    """
+    return " ".join(_PUNCTUATION_RE.sub(" ", text or "").casefold().split())
+
+
+def _drop_contents_pages(
+    chapters: List[EpubChapter],
+) -> Tuple[List[EpubChapter], List[str]]:
+    """Remove a chapter that is the book's own table of contents.
+
+    Narrated, a contents page is several minutes of chapter titles read one
+    after another before the book begins. It gives itself away completely:
+    nearly every one of its lines *is* the title of another chapter, which no
+    prose ever manages.
+
+    The test is deliberately blunt — a majority of lines matching known chapter
+    titles — so a chapter of ordinary text can never trip it, whatever its
+    length or layout.
+    """
+    titles = {_toc_key(chapter.title) for chapter in chapters}
+    titles.discard("")
+    kept: List[EpubChapter] = []
+    removed: List[str] = []
+    for chapter in chapters:
+        lines = [line for line in (l.strip() for l in chapter.text.splitlines()) if line]
+        if len(lines) >= _CONTENTS_MIN_LINES:
+            matching = sum(1 for line in lines if _toc_key(line) in titles)
+            if matching >= _CONTENTS_RATIO * len(lines):
+                removed.append(
+                    f"« {chapter.title} » (table des matières : {matching} de ses "
+                    f"{len(lines)} lignes sont des titres de chapitres)"
+                )
+                continue
+        kept.append(chapter)
+    return kept, removed
+
+
 def _text_after_title(text: str, title: str) -> Optional[str]:
     """What follows the title when ``text`` opens with it, ignoring whitespace.
 
@@ -563,12 +701,14 @@ def read_epub(
     *,
     min_chars: int = DEFAULT_MIN_CHARS,
     split_on_headings: bool = True,
+    strip_boilerplate: bool = True,
 ) -> EpubBook:
     """Read an EPUB into chapters, in reading order.
 
     ``split_on_headings`` cuts a spine document that holds several chapters at
     its headings; turn it off to keep one chapter per file exactly as the book
-    packages them.
+    packages them. ``strip_boilerplate`` removes the Project Gutenberg header
+    and licence; what it took out is reported in ``EpubBook.removed``.
 
     Raises :class:`EpubError` when the file is not a readable EPUB — a wrong
     extension, a corrupt archive, DRM, or a manifest that lists no text.
@@ -666,13 +806,25 @@ def read_epub(
                 )
             )
 
+    removed: List[str] = []
+    if strip_boilerplate:
+        chapters, removed = _strip_gutenberg(chapters)
+        chapters, contents_removed = _drop_contents_pages(chapters)
+        removed.extend(contents_removed)
+
     if not chapters:
         raise EpubError(
             "No readable text found in this EPUB — it may be a scanned book "
             "(images only) or use a structure we cannot read."
         )
 
-    return EpubBook(title=title, author=author, chapters=chapters, skipped=skipped)
+    return EpubBook(
+        title=title,
+        author=author,
+        chapters=chapters,
+        skipped=skipped,
+        removed=removed,
+    )
 
 
 def to_book_text(book: EpubBook) -> str:
@@ -701,9 +853,15 @@ def load_book_text(
     *,
     min_chars: int = DEFAULT_MIN_CHARS,
     split_on_headings: bool = True,
+    strip_boilerplate: bool = True,
 ) -> Tuple[str, EpubBook]:
     """Read an EPUB straight to narratable text, keeping the book for its metadata."""
-    book = read_epub(path, min_chars=min_chars, split_on_headings=split_on_headings)
+    book = read_epub(
+        path,
+        min_chars=min_chars,
+        split_on_headings=split_on_headings,
+        strip_boilerplate=strip_boilerplate,
+    )
     return to_book_text(book), book
 
 
@@ -719,4 +877,6 @@ def summarize(book: EpubBook) -> str:
         lines.append(f"  {index:>3}. {chapter.title} ({chapter.characters} car.)")
     if book.skipped:
         lines.append(f"  ({len(book.skipped)} document(s) trop court(s) ignoré(s))")
+    for note in book.removed:
+        lines.append(f"  retiré : {note}")
     return "\n".join(lines)

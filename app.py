@@ -850,16 +850,17 @@ def create_demo_interface(demo: VoxCPMDemo):
 
         if book is None:
             return content, gr.update(), gr.update(), gr.update()
-        return (
-            content,
-            book.title or gr.update(),
-            book.author or gr.update(),
-            I18N("book_epub_loaded").format(
-                chapters=len(book.chapters),
-                title=book.title or Path(file_path).stem,
-                author=f" — {book.author}" if book.author else "",
-            ),
+
+        status = I18N("book_epub_loaded").format(
+            chapters=len(book.chapters),
+            title=book.title or Path(file_path).stem,
+            author=f" — {book.author}" if book.author else "",
         )
+        # What was taken out of the book is said out loud, never assumed
+        # unwanted: the reader is the one who decides it was boilerplate.
+        if book.removed:
+            status += "\n\n" + "\n".join(f"- 🗑️ {note}" for note in book.removed)
+        return content, book.title or gr.update(), book.author or gr.update(), status
 
     def _generate(
         text: str,

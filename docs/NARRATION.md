@@ -142,14 +142,18 @@ Ce qui en est tiré :
   6 énormes chapitres au lieu de ses 25 vrais. `--no-epub-split` désactive.
 - **Les pages de garde sont écartées** en dessous de `--epub-min-chars`
   caractères (140 par défaut) — une couverture n'est pas un chapitre.
+- **L'appareil éditorial est retiré** : l'en-tête et la licence du projet
+  Gutenberg (17 000 caractères d'anglais juridique, soit ~20 min de narration en
+  fin de livre) sont coupés sur les marqueurs officiels `*** START OF … ***` et
+  `*** END OF … ***`, et une table des matières présente dans le corps du livre
+  est écartée quand la majorité de ses lignes sont des titres de chapitres.
+  **Rien n'est retiré en silence** : chaque suppression est listée dans le plan
+  et sous le bouton de chargement. `--keep-boilerplate` désactive.
 - **Un EPUB protégé par DRM est refusé** avec un message clair, plutôt que narré
   en bruit binaire.
 
-Trois limites à connaître :
+Deux limites à connaître :
 
-- Une **table des matières éditoriale** présente dans le corps du livre est
-  importée comme le reste du texte. Elle apparaît dans le plan avant génération :
-  supprime-la de la zone de texte.
 - Un livre **entièrement contenu dans un seul fichier** reste un seul chapitre :
   avec un seul document, rien ne permet de distinguer un titre de livre au-dessus
   de ses chapitres d'un chapitre au-dessus de ses scènes. Insère des `---` pour

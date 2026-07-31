@@ -412,6 +412,108 @@ class TestFrontMatter:
         assert len(epub.read_epub(path, min_chars=1).chapters) == 2
 
 
+class TestBoilerplate:
+    """The apparatus around a book: Gutenberg wrappers, contents pages."""
+
+    HEADER = (
+        "<p>The Project Gutenberg eBook of Le Livre</p>"
+        "<p>This eBook is for the use of anyone anywhere at no cost.</p>"
+        "<p>*** START OF THE PROJECT GUTENBERG EBOOK LE LIVRE ***</p>"
+    )
+    FOOTER = (
+        "<p>*** END OF THE PROJECT GUTENBERG EBOOK LE LIVRE ***</p>"
+        "<p>THE FULL PROJECT GUTENBERG LICENSE — Section 1. General Terms of Use.</p>"
+    )
+
+    def test_the_english_notice_before_the_book_is_removed(self, tmp_path):
+        body = f"{self.HEADER}<h2>I Le départ</h2><p>{LONG}</p>"
+        path = build_epub(tmp_path / "gh.epub", [("ch1.xhtml", document(body))])
+        book = epub.read_epub(path)
+        assert "Project Gutenberg" not in book.chapters[0].text
+        assert LONG.strip()[:40] in book.chapters[0].text
+
+    def test_the_licence_after_the_book_is_removed(self, tmp_path):
+        body = f"<h2>I Le départ</h2><p>{LONG}</p>{self.FOOTER}"
+        path = build_epub(tmp_path / "gf.epub", [("ch1.xhtml", document(body))])
+        book = epub.read_epub(path)
+        assert "FULL PROJECT GUTENBERG LICENSE" not in book.chapters[-1].text
+        assert LONG.strip()[:40] in book.chapters[-1].text
+
+    def test_a_whole_licence_chapter_is_dropped(self, tmp_path):
+        documents = [
+            ("ch1.xhtml", document(f"<h2>I Le départ</h2><p>{LONG}</p>{self.FOOTER}")),
+            ("ch2.xhtml", document(f"<h2>Licence</h2><p>{LONG}</p>")),
+        ]
+        path = build_epub(tmp_path / "gc.epub", documents)
+        book = epub.read_epub(path)
+        assert [c.title for c in book.chapters] == ["I Le départ"]
+
+    def test_the_opening_chapter_is_retitled_from_what_is_left(self, tmp_path):
+        """Its title came from a heading inside the notice that was removed."""
+        body = (
+            "<h2>The Project Gutenberg eBook of Le Livre</h2>"
+            "<p>*** START OF THE PROJECT GUTENBERG EBOOK LE LIVRE ***</p>"
+            f"<p>LE LIVRE</p><p>par une autrice</p><p>{LONG}</p>"
+        )
+        path = build_epub(tmp_path / "gt.epub", [("ch1.xhtml", document(body))])
+        book = epub.read_epub(path)
+        assert book.chapters[0].title == "LE LIVRE"
+
+    def test_nothing_is_removed_silently(self, tmp_path):
+        body = f"{self.HEADER}<h2>I Le départ</h2><p>{LONG}</p>{self.FOOTER}"
+        path = build_epub(tmp_path / "gr.epub", [("ch1.xhtml", document(body))])
+        book = epub.read_epub(path)
+        assert len(book.removed) == 2
+        assert any("en-tête" in note for note in book.removed)
+        assert any("licence" in note for note in book.removed)
+
+    def test_stripping_can_be_turned_off(self, tmp_path):
+        body = f"{self.HEADER}<h2>I Le départ</h2><p>{LONG}</p>{self.FOOTER}"
+        path = build_epub(tmp_path / "gk.epub", [("ch1.xhtml", document(body))])
+        book = epub.read_epub(path, strip_boilerplate=False)
+        assert "Project Gutenberg" in book.chapters[0].text
+        assert book.removed == []
+
+    def test_a_book_without_the_markers_is_untouched(self, simple_book):
+        book = epub.read_epub(simple_book)
+        assert book.removed == []
+        assert len(book.chapters) == 2
+
+    def test_a_contents_page_is_dropped(self, tmp_path):
+        contents = (
+            "<h2>Table des matières</h2>"
+            "<p>I Le départ</p><p>II. La traversée</p><p>III Le retour</p>"
+            "<p>IV L'arrivée</p><p>V La fin</p>"
+        )
+        documents = [
+            ("toc.xhtml", document(contents)),
+            ("c1.xhtml", document(f"<h2>I Le départ</h2><p>{LONG}</p>")),
+            ("c2.xhtml", document(f"<h2>II La traversée</h2><p>{LONG}</p>")),
+            ("c3.xhtml", document(f"<h2>III Le retour</h2><p>{LONG}</p>")),
+            ("c4.xhtml", document(f"<h2>IV L'arrivée</h2><p>{LONG}</p>")),
+            ("c5.xhtml", document(f"<h2>V La fin</h2><p>{LONG}</p>")),
+        ]
+        path = build_epub(tmp_path / "toc.epub", documents, prefix="OEBPS/")
+        book = epub.read_epub(path, min_chars=1)
+        assert "Table des matières" not in [c.title for c in book.chapters]
+        assert any("table des matières" in note for note in book.removed)
+
+    def test_punctuation_does_not_hide_a_contents_page(self, tmp_path):
+        """`CHAPITRE II.` in the list, `CHAPITRE II` in the heading."""
+        assert epub._toc_key("CHAPITRE II.") == epub._toc_key("Chapitre II")
+
+    def test_ordinary_prose_is_never_taken_for_a_contents_page(self, tmp_path):
+        """The rule must not be able to eat a chapter of the actual book."""
+        documents = [
+            ("c1.xhtml", document(f"<h2>I Le départ</h2><p>{LONG}</p>")),
+            ("c2.xhtml", document(f"<h2>II La traversée</h2><p>{LONG}</p>")),
+        ]
+        path = build_epub(tmp_path / "prose.epub", documents)
+        book = epub.read_epub(path)
+        assert len(book.chapters) == 2
+        assert book.removed == []
+
+
 class TestFailures:
     def test_missing_file(self, tmp_path):
         with pytest.raises(epub.EpubError, match="No such file"):

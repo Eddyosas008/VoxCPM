@@ -117,6 +117,9 @@ def build_parser() -> argparse.ArgumentParser:
     text.add_argument("--no-epub-split", action="store_true",
                       help="EPUB: keep one chapter per file instead of cutting files that "
                            "hold several chapters at their headings")
+    text.add_argument("--keep-boilerplate", action="store_true",
+                      help="EPUB: keep the Project Gutenberg header and licence, and any "
+                           "contents page, instead of removing them")
     text.add_argument("--chunk-max-chars", type=int, default=chunking.DEFAULT_MAX_CHARS,
                       help=f"Max characters per segment (default: {chunking.DEFAULT_MAX_CHARS})")
 
@@ -177,6 +180,7 @@ def main() -> int:
                 in_path,
                 min_chars=args.epub_min_chars,
                 split_on_headings=not args.no_epub_split,
+                strip_boilerplate=not args.keep_boilerplate,
             )
         except epub.EpubError as error:
             raise SystemExit(str(error))
