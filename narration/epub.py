@@ -4,9 +4,10 @@ An EPUB is a ZIP holding XHTML documents, an OPF manifest that lists them and a
 spine that puts them in reading order. Everything downstream of this module —
 segmentation, French normalisation, synthesis, assembly — already works on plain
 chapters separated by ``---``, so the whole job here is to turn a book into that
-text and then get out of the way. Nothing is written to disk and nothing is
-extracted: entries are read from the archive by name, so a crafted path in a
-manifest cannot escape anywhere.
+text and then get out of the way. Entries are read from the archive by name and
+never unpacked, so a crafted path in a manifest cannot escape anywhere; the one
+exception is :func:`extract_cover`, which writes a single image to a path the
+caller chose.
 
 Four things earn their complexity:
 
@@ -49,6 +50,7 @@ __all__ = [
     "EpubBook",
     "EpubChapter",
     "EpubError",
+    "extract_cover",
     "is_epub",
     "load_book_text",
     "read_epub",
@@ -329,6 +331,89 @@ def _resolve(base: str, href: str) -> str:
     directory = posixpath.dirname(base)
     joined = posixpath.join(directory, href) if directory else href
     return posixpath.normpath(joined).lstrip("/")
+
+
+def _cover_item(opf: ET.Element, manifest: Dict[str, Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """The manifest entry holding the cover image, by any of the three routes.
+
+    EPUB 3 marks it with ``properties="cover-image"``; EPUB 2 points at it from
+    a ``<meta name="cover" content="…">``; and a book that does neither usually
+    still calls the file something with "cover" in it. Real books use all three,
+    sometimes two at once, so all three are tried in that order.
+    """
+    for item in manifest.values():
+        if "cover-image" in item["properties"].split():
+            return item
+
+    for meta in _iter_local(opf, "meta"):
+        if _attr(meta, "name").lower() == "cover":
+            item = manifest.get(_attr(meta, "content"))
+            if item and item["media_type"].startswith("image/"):
+                return item
+
+    for item in manifest.values():
+        if item["media_type"].startswith("image/") and "cover" in item["path"].lower():
+            return item
+    return None
+
+
+def _cover_suffix(media_type: str, path: str) -> str:
+    """File extension for the cover, from its declared type or its own name."""
+    known = {
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/png": ".png",
+        "image/gif": ".gif",
+        "image/webp": ".webp",
+        "image/svg+xml": ".svg",
+    }
+    if media_type in known:
+        return known[media_type]
+    suffix = posixpath.splitext(path)[1].lower()
+    return suffix if suffix else ".img"
+
+
+def extract_cover(path, destination) -> Optional[Path]:
+    """Write the book's cover image next to its chapters, and return its path.
+
+    Returns None when the EPUB carries no cover, which is common enough not to
+    be an error — a book without a cover is still a book.
+
+    ``destination`` may be a directory, in which case the file is named after
+    the image it came from, or a full path.
+    """
+    file_path = Path(path)
+    if not file_path.is_file():
+        return None
+
+    try:
+        archive = zipfile.ZipFile(file_path)
+    except zipfile.BadZipFile:
+        return None
+
+    with archive:
+        try:
+            opf_path = _opf_path(archive)
+            opf = _parse_xml(_read(archive, opf_path), "OPF manifest")
+        except EpubError:
+            return None
+        manifest = _manifest(opf, opf_path)
+        item = _cover_item(opf, manifest)
+        if item is None:
+            return None
+        try:
+            data = archive.read(item["path"])
+        except KeyError:
+            return None
+
+    target = Path(destination)
+    if target.is_dir() or not target.suffix:
+        target.mkdir(parents=True, exist_ok=True)
+        target = target / ("couverture" + _cover_suffix(item["media_type"], item["path"]))
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return target
 
 
 def is_epub(path) -> bool:

@@ -148,6 +148,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true", help="Show the plan, generate nothing")
     run.add_argument("--assemble", nargs="?", const="m4b", choices=["m4b", "m4a", "mp3", "wav"],
                      help="Assemble the chapters into one chaptered file when done")
+    run.add_argument("--cover", help="Cover image for the assembled file "
+                                     "(default: the EPUB's own, when there is one)")
+    run.add_argument("--no-cover", action="store_true",
+                     help="Do not embed a cover in the assembled file")
     run.add_argument("--assemble-bitrate",
                      help="Bitrate of the assembled file, e.g. 96, 128k "
                           "(default: 64k AAC, 128k MP3)")
@@ -443,6 +447,16 @@ def main() -> int:
         if not chapter_files:
             print("Rien à assembler.")
             return 1 if (args.qc_strict and defective) else 0
+        # The book carries its own cover; only an explicit --cover beats it.
+        cover_path = Path(args.cover) if args.cover else None
+        if cover_path is None and not args.no_cover and epub.is_epub(in_path):
+            cover_path = epub.extract_cover(in_path, outdir)
+            if cover_path:
+                print(f"Couverture  : {cover_path.name} (tirée de l'EPUB)")
+        if cover_path and not cover_path.is_file():
+            print(f"Couverture introuvable, ignorée : {cover_path}")
+            cover_path = None
+
         target = outdir / f"{outdir.name}_complet.{args.assemble}"
         print(f"\nAssemblage de {len(chapter_files)} chapitre(s) -> {target.name}")
         result = assembly.assemble(
@@ -452,6 +466,7 @@ def main() -> int:
             author=args.author,
             titles=titles,
             bitrate=args.assemble_bitrate,
+            cover_path=cover_path,
         )
         print(f"Durée totale : {result.duration_sec / 60:.1f} min")
         print(result.message)

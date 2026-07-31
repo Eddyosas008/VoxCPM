@@ -874,6 +874,18 @@ def create_demo_interface(demo: VoxCPMDemo):
         # unwanted: the reader is the one who decides it was boilerplate.
         if book.removed:
             status += "\n\n" + "\n".join(f"- 🗑️ {note}" for note in book.removed)
+
+        # The book directory is derived from the title we are about to fill in,
+        # so the cover can be put where the assembly will look for it. A title
+        # edited afterwards moves that directory; the cover is then simply not
+        # found, which costs a picture and nothing else.
+        try:
+            cover = epub_reader.extract_cover(file_path, _book_dir(book.title))
+            if cover:
+                status += f"\n\n- 🖼️ Couverture importée (`{cover.name}`)"
+        except OSError as error:  # a read-only or full disk, nothing worse
+            logger.warning(f"Could not extract the EPUB cover: {error}")
+
         return content, book.title or gr.update(), book.author or gr.update(), status
 
     def _generate(
@@ -1366,12 +1378,15 @@ def create_demo_interface(demo: VoxCPMDemo):
             raise gr.Error(f"Aucun chapitre trouvé dans {outdir}. Lancez d'abord la narration.")
 
         target = outdir / f"{outdir.name}_complet.{output_format}"
+        # Written by the EPUB import, if the book carried one.
+        covers = sorted(outdir.glob("couverture.*"))
         result = assembly.assemble(
             chapter_files,
             target,
             title=title or outdir.name,
             author=author or "",
             bitrate=bitrate or None,
+            cover_path=covers[0] if covers else None,
         )
         message = [
             f"### Assemblage\n",

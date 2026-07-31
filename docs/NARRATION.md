@@ -352,6 +352,10 @@ produit quand même le WAV complet et le fichier de marqueurs, puis affiche la c
 exacte à lancer une fois ffmpeg installé. Les heures de synthèse ne sont jamais perdues
 à cause d'un encodeur manquant.
 
+**La couverture du livre est reprise automatiquement** quand la source est un
+`.epub` : elle est extraite à côté des chapitres (`couverture.jpg`) et intégrée
+au M4B. `--cover mon_image.jpg` impose la tienne, `--no-cover` n'en met aucune.
+
 **Le débit** vaut par défaut **64 kbps AAC** pour un M4B et **128 kbps** pour un MP3.
 Ce n'est pas un compromis : 64k AAC mono est à peu près ce qu'Audible diffuse
 lui-même pour un livre audio fini, et la parole ne gagne quasiment rien au-dessus.

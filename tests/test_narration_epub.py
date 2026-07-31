@@ -605,6 +605,82 @@ class TestToBookText:
         assert len(chunking.split_chapters(text)) == 1
 
 
+class TestCover:
+    """A cover is found by any of the three routes real books use."""
+
+    COVER = b"\x89PNG\r\n\x1a\n" + b"pixels"
+
+    def with_cover(self, tmp_path, name, manifest_extra, meta="", image="cover.png",
+                   media_type="image/png"):
+        """An EPUB whose cover is declared the way ``manifest_extra`` says."""
+        path = build_epub(
+            tmp_path / name,
+            [("ch1.xhtml", document(f"<p>{LONG}</p>"))],
+        )
+        with zipfile.ZipFile(path) as archive:
+            entries = {entry: archive.read(entry) for entry in archive.namelist()}
+        opf = entries["OEBPS/content.opf"].decode()
+        opf = opf.replace("</manifest>", manifest_extra + "</manifest>")
+        opf = opf.replace("</metadata>", meta + "</metadata>")
+        entries["OEBPS/content.opf"] = opf.encode()
+        entries[f"OEBPS/{image}"] = self.COVER
+        with zipfile.ZipFile(path, "w") as archive:
+            for entry, data in entries.items():
+                archive.writestr(entry, data)
+        return path
+
+    def test_epub3_marks_it_with_a_property(self, tmp_path):
+        path = self.with_cover(
+            tmp_path, "c3.epub",
+            '<item id="cov" href="cover.png" media-type="image/png" properties="cover-image"/>',
+        )
+        out = epub.extract_cover(path, tmp_path / "out")
+        assert out is not None and out.read_bytes() == self.COVER
+        assert out.suffix == ".png"
+
+    def test_epub2_points_at_it_from_the_metadata(self, tmp_path):
+        path = self.with_cover(
+            tmp_path, "c2.epub",
+            '<item id="cov" href="cover.png" media-type="image/png"/>',
+            meta='<meta name="cover" content="cov"/>',
+        )
+        assert epub.extract_cover(path, tmp_path / "out2") is not None
+
+    def test_a_book_that_declares_nothing_is_found_by_name(self, tmp_path):
+        path = self.with_cover(
+            tmp_path, "c1.epub",
+            '<item id="img" href="cover.png" media-type="image/png"/>',
+        )
+        assert epub.extract_cover(path, tmp_path / "out3") is not None
+
+    def test_the_extension_follows_the_declared_type(self, tmp_path):
+        path = self.with_cover(
+            tmp_path, "cj.epub",
+            '<item id="cov" href="cover.bin" media-type="image/jpeg" properties="cover-image"/>',
+            image="cover.bin",
+        )
+        out = epub.extract_cover(path, tmp_path / "out4")
+        assert out is not None and out.suffix == ".jpg"
+
+    def test_a_book_without_a_cover_is_not_an_error(self, simple_book, tmp_path):
+        assert epub.extract_cover(simple_book, tmp_path / "out5") is None
+
+    def test_an_unreadable_file_is_not_an_error_either(self, tmp_path):
+        broken = tmp_path / "broken.epub"
+        broken.write_text("pas une archive", encoding="utf-8")
+        assert epub.extract_cover(broken, tmp_path / "out6") is None
+        assert epub.extract_cover(tmp_path / "absent.epub", tmp_path / "out7") is None
+
+    def test_an_explicit_path_is_honoured(self, tmp_path):
+        path = self.with_cover(
+            tmp_path, "cp.epub",
+            '<item id="cov" href="cover.png" media-type="image/png" properties="cover-image"/>',
+        )
+        target = tmp_path / "ailleurs" / "image.png"
+        assert epub.extract_cover(path, target) == target
+        assert target.read_bytes() == self.COVER
+
+
 class TestHelpers:
     def test_is_epub(self, tmp_path):
         assert epub.is_epub("livre.epub")
