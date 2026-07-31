@@ -32,14 +32,43 @@ __all__ = [
     "concat_chapters",
     "ffmpeg_command",
     "find_ffmpeg",
+    "normalize_bitrate",
 ]
 
-#: Encoder settings per container. Audiobook speech does not benefit from more.
+#: Encoder settings per container.
+#:
+#: 64 kbps AAC mono is not a compromise here: it is at or above what Audible
+#: itself streams for a finished audiobook (its enhanced format sits around
+#: that figure), and speech gains very little above it. MP3 needs more to
+#: sound the same, hence 128. Both are overridable — a book that will be
+#: re-encoded downstream, or archived, is worth more.
 _ENCODERS: Dict[str, Dict[str, str]] = {
     "m4b": {"codec": "aac", "bitrate": "64k"},
     "m4a": {"codec": "aac", "bitrate": "64k"},
-    "mp3": {"codec": "libmp3lame", "bitrate": "96k"},
+    "mp3": {"codec": "libmp3lame", "bitrate": "128k"},
 }
+
+
+def normalize_bitrate(bitrate: str | int | None) -> Optional[str]:
+    """``128``, ``"128"`` and ``"128k"`` all mean the same thing to a user.
+
+    Returns None for anything empty, which the callers read as "keep the
+    default for this container".
+    """
+    if bitrate is None:
+        return None
+    text = str(bitrate).strip().lower()
+    if not text:
+        return None
+    if text.endswith("k"):
+        text = text[:-1]
+    try:
+        value = int(float(text))
+    except ValueError as error:
+        raise ValueError(f"Not a bitrate: {bitrate!r}") from error
+    if value <= 0:
+        raise ValueError(f"Not a bitrate: {bitrate!r}")
+    return f"{value}k"
 
 #: Silence inserted between chapters in the concatenated file, in seconds.
 DEFAULT_CHAPTER_GAP_SEC = 1.5
@@ -207,10 +236,12 @@ def ffmpeg_command(
     out_path: str | Path,
     *,
     cover_path: Optional[str | Path] = None,
+    bitrate: str | int | None = None,
 ) -> List[str]:
     """The ffmpeg invocation that turns the WAV into the final chaptered file."""
     out = Path(out_path)
     encoder = _ENCODERS.get(out.suffix.lstrip(".").lower(), _ENCODERS["m4b"])
+    chosen = normalize_bitrate(bitrate) or encoder["bitrate"]
 
     command = ["ffmpeg", "-y", "-i", str(wav_path), "-i", str(metadata_path)]
     if cover_path:
@@ -218,7 +249,7 @@ def ffmpeg_command(
     command += ["-map", "0:a", "-map_metadata", "1"]
     if cover_path:
         command += ["-map", "2:v", "-disposition:v", "attached_pic", "-c:v", "copy"]
-    command += ["-c:a", encoder["codec"], "-b:a", encoder["bitrate"], "-ac", "1"]
+    command += ["-c:a", encoder["codec"], "-b:a", chosen, "-ac", "1"]
     if out.suffix.lower() in (".m4b", ".m4a"):
         command += ["-movflags", "+faststart"]
     command.append(str(out))
@@ -235,6 +266,7 @@ def assemble(
     gap_sec: float = DEFAULT_CHAPTER_GAP_SEC,
     cover_path: Optional[str | Path] = None,
     keep_wav: bool = True,
+    bitrate: str | int | None = None,
 ) -> AssemblyResult:
     """Build a single chaptered audiobook from per-chapter WAVs.
 
@@ -271,7 +303,9 @@ def assemble(
         result.message = "Assembled to WAV (chapter markers written alongside)."
         return result
 
-    command = ffmpeg_command(wav_path, metadata_path, out, cover_path=cover_path)
+    command = ffmpeg_command(
+        wav_path, metadata_path, out, cover_path=cover_path, bitrate=bitrate
+    )
     if not find_ffmpeg():
         result.pending_command = command
         result.message = (

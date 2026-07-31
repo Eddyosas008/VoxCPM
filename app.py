@@ -225,6 +225,8 @@ _I18N_TRANSLATIONS = {
         "book_assemble_btn": "📦 Assemble the audiobook",
         "book_check_btn": "✅ Check against distribution standards",
         "book_format_label": "Format",
+        "book_bitrate_label": "Bitrate",
+        "book_bitrate_info": "64k AAC is what Audible itself streams; speech gains little above it. Raise it for an archive copy.",
         "book_status_label": "Progress",
         "book_audio_label": "Last finished chapter",
         "book_file_output_label": "Assembled file",
@@ -303,6 +305,8 @@ _I18N_TRANSLATIONS = {
         "book_assemble_btn": "📦 Assembler le livre audio",
         "book_check_btn": "✅ Vérifier la conformité de dépôt",
         "book_format_label": "Format",
+        "book_bitrate_label": "Débit",
+        "book_bitrate_info": "64k AAC est ce qu'Audible diffuse lui-même ; la parole gagne peu au-dessus. À monter pour une copie d'archive.",
         "book_status_label": "Avancement",
         "book_audio_label": "Dernier chapitre terminé",
         "book_file_output_label": "Fichier assemblé",
@@ -1354,7 +1358,7 @@ def create_demo_interface(demo: VoxCPMDemo):
         )
         return "\n".join(lines), str(rebuilt.path)
 
-    def _book_assemble(title, author, output_format):
+    def _book_assemble(title, author, output_format, bitrate=""):
         """Join the generated chapters into one chaptered file."""
         outdir = _book_dir(title)
         chapter_files = sorted(outdir.glob("chapitre_*.wav"))
@@ -1367,6 +1371,7 @@ def create_demo_interface(demo: VoxCPMDemo):
             target,
             title=title or outdir.name,
             author=author or "",
+            bitrate=bitrate or None,
         )
         message = [
             f"### Assemblage\n",
@@ -1715,6 +1720,13 @@ def create_demo_interface(demo: VoxCPMDemo):
                                 label=I18N("book_format_label"),
                                 scale=1,
                             )
+                            book_bitrate = gr.Dropdown(
+                                choices=["64k", "96k", "128k", "192k", "256k"],
+                                value="64k",
+                                label=I18N("book_bitrate_label"),
+                                info=I18N("book_bitrate_info"),
+                                scale=1,
+                            )
                             book_assemble_btn = gr.Button(I18N("book_assemble_btn"), scale=2)
                             book_check_btn = gr.Button(I18N("book_check_btn"), scale=2)
 
@@ -1920,7 +1932,7 @@ def create_demo_interface(demo: VoxCPMDemo):
 
         book_assemble_btn.click(
             fn=_book_assemble,
-            inputs=[book_title, book_author, book_format],
+            inputs=[book_title, book_author, book_format, book_bitrate],
             outputs=[book_status, book_output_file],
             show_progress=True,
             api_name="assemble_book",

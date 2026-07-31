@@ -86,6 +86,7 @@ def main() -> int:
     parser.add_argument("--author", default="", help="Author / narrator")
     parser.add_argument("--titles", help="File with one chapter title per line")
     parser.add_argument("--cover", help="Cover image embedded in the finished file")
+    parser.add_argument("--bitrate", help="Audio bitrate, e.g. 96, 128k (default: 64k AAC, 128k MP3)")
     parser.add_argument(
         "--gap",
         type=float,
@@ -126,6 +127,7 @@ def main() -> int:
         titles=_read_titles(directory, args.titles),
         gap_sec=args.gap,
         cover_path=args.cover,
+        bitrate=args.bitrate,
     )
 
     print(f"\nDurée totale : {result.duration_sec / 60:.1f} min ({len(result.chapters)} chapitres)")

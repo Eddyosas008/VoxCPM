@@ -352,6 +352,12 @@ produit quand même le WAV complet et le fichier de marqueurs, puis affiche la c
 exacte à lancer une fois ffmpeg installé. Les heures de synthèse ne sont jamais perdues
 à cause d'un encodeur manquant.
 
+**Le débit** vaut par défaut **64 kbps AAC** pour un M4B et **128 kbps** pour un MP3.
+Ce n'est pas un compromis : 64k AAC mono est à peu près ce qu'Audible diffuse
+lui-même pour un livre audio fini, et la parole ne gagne quasiment rien au-dessus.
+`--bitrate 192k` (ou le menu **Débit** dans l'onglet) le monte, pour une copie
+d'archive ou un fichier qui sera ré-encodé ensuite.
+
 Les titres de chapitres viennent, dans l'ordre : de `--titles`, puis d'un fichier
 `titles.txt` à côté des WAV (écrit automatiquement par `narrate_book.py` à partir de la
 première ligne de chaque chapitre), puis des noms de fichiers.

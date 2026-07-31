@@ -130,6 +130,42 @@ class TestFfmpegCommand:
         assert "attached_pic" in command
 
 
+class TestBitrate:
+    def test_each_container_has_a_default(self, tmp_path):
+        """64k AAC is what Audible streams; MP3 needs more to sound the same."""
+        m4b = assemble.ffmpeg_command(tmp_path / "b.wav", tmp_path / "b.txt", tmp_path / "b.m4b")
+        mp3 = assemble.ffmpeg_command(tmp_path / "b.wav", tmp_path / "b.txt", tmp_path / "b.mp3")
+        assert m4b[m4b.index("-b:a") + 1] == "64k"
+        assert mp3[mp3.index("-b:a") + 1] == "128k"
+
+    def test_it_can_be_raised_for_an_archive_copy(self, tmp_path):
+        command = assemble.ffmpeg_command(
+            tmp_path / "b.wav", tmp_path / "b.txt", tmp_path / "b.m4b", bitrate="192k"
+        )
+        assert command[command.index("-b:a") + 1] == "192k"
+
+    def test_a_user_may_write_it_however_they_like(self):
+        assert assemble.normalize_bitrate(128) == "128k"
+        assert assemble.normalize_bitrate("128") == "128k"
+        assert assemble.normalize_bitrate("128k") == "128k"
+        assert assemble.normalize_bitrate("128K") == "128k"
+
+    def test_nothing_means_keep_the_default(self):
+        assert assemble.normalize_bitrate(None) is None
+        assert assemble.normalize_bitrate("") is None
+        assert assemble.normalize_bitrate("   ") is None
+
+    def test_nonsense_is_refused_rather_than_passed_to_ffmpeg(self):
+        for value in ("beaucoup", "-64", "0", "12x8"):
+            with pytest.raises(ValueError):
+                assemble.normalize_bitrate(value)
+
+    def test_it_reaches_the_encoder_through_assemble(self, chapter_files, tmp_path, monkeypatch):
+        monkeypatch.setattr(assemble, "find_ffmpeg", lambda: None)
+        result = assemble.assemble(chapter_files, tmp_path / "livre.m4b", bitrate=96)
+        assert "96k" in result.pending_command
+
+
 class TestAssemble:
     def test_audio_and_markers_survive_a_missing_ffmpeg(self, chapter_files, tmp_path, monkeypatch):
         monkeypatch.setattr(assemble, "find_ffmpeg", lambda: None)

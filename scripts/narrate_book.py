@@ -148,6 +148,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true", help="Show the plan, generate nothing")
     run.add_argument("--assemble", nargs="?", const="m4b", choices=["m4b", "m4a", "mp3", "wav"],
                      help="Assemble the chapters into one chaptered file when done")
+    run.add_argument("--assemble-bitrate",
+                     help="Bitrate of the assembled file, e.g. 96, 128k "
+                          "(default: 64k AAC, 128k MP3)")
     run.add_argument("--export-acx", action="store_true",
                      help="Prepare the folder a distributor accepts (one file per chapter, "
                           "192 kbps CBR MP3, retail sample) once the narration is done")
@@ -448,6 +451,7 @@ def main() -> int:
             title=args.title or in_path.stem,
             author=args.author,
             titles=titles,
+            bitrate=args.assemble_bitrate,
         )
         print(f"Durée totale : {result.duration_sec / 60:.1f} min")
         print(result.message)
