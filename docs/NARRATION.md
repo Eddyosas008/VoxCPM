@@ -368,10 +368,17 @@ cache, donc **c'est affaire de secondes** (mesuré : 23 s sur un livre déjà na
     --title "Mon Livre" --author "Edwin" --format m4b
 ```
 
-**ffmpeg n'est pas installé sur cette machine.** Ce n'est pas bloquant : le script
-produit quand même le WAV complet et le fichier de marqueurs, puis affiche la commande
-exacte à lancer une fois ffmpeg installé. Les heures de synthèse ne sont jamais perdues
-à cause d'un encodeur manquant.
+**Sans ffmpeg, rien n'est perdu** : le script produit quand même le WAV complet et le
+fichier de marqueurs, puis affiche la commande exacte à lancer une fois ffmpeg installé.
+Les heures de synthèse ne dépendent jamais d'un encodeur manquant.
+
+Pour l'installer sous Windows, sans droits administrateur :
+
+```
+winget install --id Gyan.FFmpeg -e --scope user
+```
+
+Il faut ensuite **rouvrir le terminal** pour que le `PATH` soit pris en compte.
 
 **La couverture du livre est reprise automatiquement** quand la source est un
 `.epub` : elle est extraite à côté des chapitres (`couverture.jpg`) et intégrée
@@ -437,6 +444,10 @@ d'un binaire manquant.
 | `--sample-chapter 4` | Choisit le chapitre à échantillonner |
 | `--no-sample` | Pas d'extrait |
 | `--keep-wav` | Garde les WAV intermédiaires |
+
+**Vérifié pour de vrai** sur un livre narré de bout en bout : les quatre fichiers
+produits sortent en `mp3`, `44100 Hz`, `1 canal`, **débit constant de 192 000 bps**
+exactement, sans en-tête Xing — c'est-à-dire du CBR, et non du VBR déguisé.
 
 Le script **sort en code d'erreur** s'il reste un fichier hors norme, ce qui le
 rend utilisable dans un enchaînement automatisé.
