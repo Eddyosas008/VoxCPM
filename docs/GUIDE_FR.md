@@ -111,6 +111,9 @@ python scripts/narrate_book.py livre.epub --voice "Narrateur profond & calme" --
 
 # Assembler des chapitres déjà générés
 python scripts/assemble_audiobook.py output/book_mon_livre --title "Mon Livre" --check
+
+# Préparer le dossier à déposer chez un distributeur (ACX/Audible, Amazon…)
+python scripts/export_acx.py output/book_mon_livre
 ```
 
 **→ Le guide détaillé est dans [docs/NARRATION.md](NARRATION.md)** : vitesse selon le

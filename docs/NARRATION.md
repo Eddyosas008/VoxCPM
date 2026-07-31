@@ -30,6 +30,7 @@ chacune dans un module de `narration/` — testable et utilisable indépendammen
 | **3. Synthèse** | moteur VoxCPM2 | Même seed partout → voix identique du début à la fin |
 | **4. Mastering** | `narration/audio.py` | Rogne les silences parasites, supprime les clics aux jointures, insère les pauses, normalise la sonie **une fois par chapitre** |
 | **5. Assemblage** | `narration/assemble.py` | Réunit les chapitres en un seul M4B/MP3 avec marqueurs de chapitres |
+| **6. Livraison** | `narration/delivery.py` | Découpe, échantillonne et encode les fichiers qu'un distributeur accepte (MP3 192 kbps CBR, 44,1 kHz) |
 
 Entre les étapes 2 et 3, un **cache par segment** (`narration/cache.py`) rend la
 narration reprenable : voir plus bas.
@@ -352,6 +353,62 @@ exacte à lancer une fois ffmpeg installé. Les heures de synthèse ne sont jama
 Les titres de chapitres viennent, dans l'ordre : de `--titles`, puis d'un fichier
 `titles.txt` à côté des WAV (écrit automatiquement par `narrate_book.py` à partir de la
 première ligne de chaque chapitre), puis des noms de fichiers.
+
+## Déposer chez un distributeur (ACX, Audible, Amazon…)
+
+Le M4B est ce qu'on écoute. **Ce n'est pas ce qu'on dépose.** ACX — et les
+plateformes qui s'alignent dessus — prend **un fichier par chapitre**, encodé à
+une spécification fixe, plus un extrait commercial, et refuse l'ensemble pour des
+détails qui n'ont rien à voir avec la qualité de la narration.
+
+```
+.\.venv\Scripts\python.exe scripts\export_acx.py output\book_mon_livre
+```
+
+```
+output/book_mon_livre/          ->   output/book_mon_livre/acx/
+  chapitre_001.wav                     001 - Generique de debut.mp3
+  chapitre_002.wav                     002 - Chapitre premier.mp3
+  ...                                  ...
+  titles.txt                           extrait_commercial.mp3
+                                       rapport_acx.json
+```
+
+Ce que le script fait :
+
+1. **Contrôle chaque chapitre** sur toute la spécification — sonie, crête, bruit
+   de fond, silence aux deux bouts, durée, taille — et dit lesquels reviendraient,
+   avec la raison en clair.
+2. **Découpe ce qui est trop long**, dans une pause et non au milieu d'un mot.
+   La limite est calculée, pas supposée : à 192 kbps constant, les 120 minutes et
+   les 170 Mo se croisent, et c'est le plus contraignant des deux qui décide
+   (~118 min).
+3. **Extrait un extrait commercial** de 1 à 5 min du premier vrai chapitre —
+   jamais du générique : un acheteur ne se décide pas en entendant le titre.
+4. **Encode en MP3 192 kbps CBR, 44,1 kHz, mono**, ce qui demande ffmpeg.
+
+**Sans ffmpeg, rien n'est perdu** : les WAV sont écrits, les commandes
+d'encodage sont listées dans `acx/encoder.txt`, et l'encodage peut se faire plus
+tard ou sur une autre machine. Des heures de synthèse ne doivent pas dépendre
+d'un binaire manquant.
+
+| Option | Effet |
+|---|---|
+| `--check` | Contrôle et n'écrit rien |
+| `--sample-seconds 240` | Longueur de l'extrait (60 à 300 s) |
+| `--sample-start 60` | Démarre l'extrait plus loin dans le chapitre |
+| `--sample-chapter 4` | Choisit le chapitre à échantillonner |
+| `--no-sample` | Pas d'extrait |
+| `--keep-wav` | Garde les WAV intermédiaires |
+
+Le script **sort en code d'erreur** s'il reste un fichier hors norme, ce qui le
+rend utilisable dans un enchaînement automatisé.
+
+À savoir : le **44,1 kHz est une exigence de format**, pas un gain de qualité —
+la synthèse ne produit pas cette fréquence, le rééchantillonnage se fait à
+l'encodage. Et la limite de taille est lue dans son sens le plus strict
+(170 × 10⁶ octets) : être sous une limite qui s'avère plus large coûte un
+fichier de plus, être au-dessus coûte un dépôt refusé.
 
 ## Prononciation : lexique personnalisé
 

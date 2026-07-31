@@ -17,6 +17,7 @@ Stages, in pipeline order::
     audio      trim, master and stitch the generated segments
     repair     re-roll one segment and restitch its chapter, from a saved plan
     assemble   join chapters into a single MP3/M4B with chapter markers
+    delivery   cut, sample and encode the files a distributor accepts
 """
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "cache",
     "chunking",
     "credits",
+    "delivery",
     "epub",
     "quality",
     "repair",
