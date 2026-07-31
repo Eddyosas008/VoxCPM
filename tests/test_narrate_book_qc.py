@@ -99,6 +99,12 @@ def book(tmp_path):
 
 
 def run(monkeypatch, book, outdir, *extra) -> int:
+    """Run the script over the fixture book, credits off.
+
+    These tests count segments and inspect their quality; the opening and
+    closing credits are two more chapters of real narration, and letting them in
+    would tie every count here to their wording.
+    """
     argv = [
         "narrate_book.py",
         str(book),
@@ -106,6 +112,7 @@ def run(monkeypatch, book, outdir, *extra) -> int:
         "Voix de test",
         "--outdir",
         str(outdir),
+        "--no-credits",
         *extra,
     ]
     monkeypatch.setattr(sys, "argv", argv)

@@ -50,10 +50,17 @@ class TestMeasurement:
 
 
 class TestAcxReport:
+    @staticmethod
+    def delivered(lead=0.75, tail=2.0):
+        """A chapter shaped the way it would leave the mastering stage."""
+        speech = np.concatenate([sine(2.0), audio.silence(SR, 1.5), sine(2.0)])
+        mastered, _ = audio.normalize_level(speech, SR, target_rms_db=-20.0)
+        return np.concatenate(
+            [audio.silence(SR, lead), mastered, audio.silence(SR, tail)]
+        )
+
     def test_a_correctly_mastered_signal_passes(self):
-        signal = np.concatenate([sine(2.0), audio.silence(SR, 1.5), sine(2.0)])
-        mastered, _ = audio.normalize_level(signal, SR, target_rms_db=-20.0)
-        report = audio.acx_report(mastered, SR)
+        report = audio.acx_report(self.delivered(), SR)
         assert report["compliant"], report
 
     def test_a_too_loud_signal_is_flagged(self):
@@ -64,6 +71,39 @@ class TestAcxReport:
 
     def test_duration_is_reported(self):
         assert audio.acx_report(sine(3.0), SR)["duration_sec"] == pytest.approx(3.0, abs=0.01)
+
+    def test_a_file_opening_on_its_first_syllable_is_flagged(self):
+        """Correct levels, wrong shape — rejected at review all the same."""
+        report = audio.acx_report(self.delivered(lead=0.0), SR)
+        assert not report["head_room_ok"]
+        assert report["rms_ok"]
+        assert not report["compliant"]
+
+    def test_a_file_ending_on_its_last_syllable_is_flagged(self):
+        report = audio.acx_report(self.delivered(tail=0.1), SR)
+        assert not report["tail_room_ok"]
+        assert not report["compliant"]
+
+    def test_too_much_room_tone_is_flagged_too(self):
+        """The windows have an upper bound: dead air is a defect as well."""
+        assert not audio.acx_report(self.delivered(lead=3.0), SR)["head_room_ok"]
+        assert not audio.acx_report(self.delivered(tail=9.0), SR)["tail_room_ok"]
+
+    def test_room_tone_is_measured_in_seconds(self):
+        head, tail = audio.room_tone_sec(self.delivered(lead=0.75, tail=2.0), SR)
+        assert head == pytest.approx(0.75, abs=0.05)
+        assert tail == pytest.approx(2.0, abs=0.05)
+
+    def test_silence_only_is_all_head_room(self):
+        head, tail = audio.room_tone_sec(audio.silence(SR, 3.0), SR)
+        assert head == pytest.approx(3.0, abs=0.01)
+        assert tail == 0.0
+
+    def test_mastering_defaults_land_inside_the_acx_windows(self):
+        """The defaults must produce a compliant file without being tuned."""
+        settings = audio.MasteringSettings()
+        assert audio.ACX_HEAD_ROOM_MIN_SEC <= settings.lead_sec <= audio.ACX_HEAD_ROOM_MAX_SEC
+        assert audio.ACX_TAIL_ROOM_MIN_SEC <= settings.tail_sec <= audio.ACX_TAIL_ROOM_MAX_SEC
 
 
 class TestNormalizeLevel:

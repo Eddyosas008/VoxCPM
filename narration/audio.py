@@ -8,8 +8,11 @@ audiobook distributors actually check.
 
 The reference target is the ACX specification, which every major audiobook
 platform mirrors: RMS between -23 and -18 dBFS, peak no higher than -3 dBFS, and
-a noise floor below -60 dBFS. :func:`acx_report` reports all three so a chapter
-can be checked before it is ever uploaded.
+a noise floor below -60 dBFS. The same specification also governs the *shape* of
+a file — 0.5 to 1 second of room tone before the first word, 1 to 5 after the
+last, and no file longer than 120 minutes — so :func:`acx_report` measures those
+too. A chapter that passes on level and fails on room tone is rejected on upload
+just the same.
 
 Pure ``numpy`` on purpose — no resampling library, no loudness package. Frame
 energies are computed from a cumulative sum rather than a sliding window so that
@@ -23,10 +26,15 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 import numpy as np
 
 __all__ = [
+    "ACX_HEAD_ROOM_MAX_SEC",
+    "ACX_HEAD_ROOM_MIN_SEC",
+    "ACX_MAX_FILE_SEC",
     "ACX_PEAK_CEILING_DB",
     "ACX_RMS_MAX_DB",
     "ACX_RMS_MIN_DB",
     "ACX_NOISE_FLOOR_DB",
+    "ACX_TAIL_ROOM_MAX_SEC",
+    "ACX_TAIL_ROOM_MIN_SEC",
     "MasteringSettings",
     "acx_report",
     "as_float_mono",
@@ -38,6 +46,7 @@ __all__ = [
     "peak_db",
     "remove_dc",
     "silence",
+    "speech_bounds",
     "speech_rms_db",
     "stitch",
     "trim_silence",
@@ -48,6 +57,16 @@ ACX_RMS_MIN_DB = -23.0
 ACX_RMS_MAX_DB = -18.0
 ACX_PEAK_CEILING_DB = -3.0
 ACX_NOISE_FLOOR_DB = -60.0
+
+#: Room tone ACX expects around the speech of every delivered file, in seconds.
+#: Not decoration: a file starting on the first syllable, or ending on it, is
+#: rejected at quality review however clean its levels are.
+ACX_HEAD_ROOM_MIN_SEC = 0.5
+ACX_HEAD_ROOM_MAX_SEC = 1.0
+ACX_TAIL_ROOM_MIN_SEC = 1.0
+ACX_TAIL_ROOM_MAX_SEC = 5.0
+#: No single delivered file may run longer than two hours.
+ACX_MAX_FILE_SEC = 120 * 60
 
 _EPS = 1e-12
 #: Below this peak level a signal carries no usable level to correct.
@@ -75,9 +94,12 @@ class MasteringSettings:
     trim_keep_ms: float = 60.0
     #: Click-free ramp applied to every segment edge.
     fade_ms: float = 8.0
-    #: Silence before the first word and after the last one, in seconds.
-    lead_sec: float = 0.3
-    tail_sec: float = 0.6
+    #: Room tone before the first word and after the last one, in seconds.
+    #: Sits inside the ACX windows (0.5–1 s and 1–5 s) rather than at their
+    #: edges, so a chapter stays compliant even if trimming leaves a little
+    #: silence of its own.
+    lead_sec: float = 0.75
+    tail_sec: float = 2.0
 
 
 # --------------------------------------------------------------------------
@@ -199,21 +221,49 @@ def noise_floor_db(wav: np.ndarray, sr: int, percentile: float = 10.0) -> float:
     return _to_db(float(np.sqrt(max(np.percentile(power, percentile), 0.0))))
 
 
+def room_tone_sec(wav: np.ndarray, sr: int) -> Tuple[float, float]:
+    """Seconds of silence before the first word and after the last one.
+
+    A file with no speech at all reports its whole length as head silence and
+    nothing as tail, which is what an all-silence chapter deserves to be told.
+    """
+    wav = as_float_mono(wav)
+    if wav.size == 0 or not sr:
+        return 0.0, 0.0
+    bounds = speech_bounds(wav, sr)
+    if bounds is None:
+        return float(wav.size) / sr, 0.0
+    start, end = bounds
+    return float(start) / sr, float(max(0, wav.size - end)) / sr
+
+
 def acx_report(wav: np.ndarray, sr: int) -> dict:
-    """Measure a chapter against the ACX limits and say which ones it meets."""
+    """Measure a chapter against the ACX limits and say which ones it meets.
+
+    Level *and* shape: a chapter can sit perfectly in the loudness window and
+    still be rejected for opening on its first syllable or running past two
+    hours, so both are reported side by side.
+    """
     rms = speech_rms_db(wav, sr)
     peak = peak_db(wav)
     floor = noise_floor_db(wav, sr)
+    head, tail = room_tone_sec(wav, sr)
+    duration = float(np.asarray(wav).shape[0]) / sr if sr else 0.0
     checks = {
         "rms_ok": ACX_RMS_MIN_DB <= rms <= ACX_RMS_MAX_DB,
         "peak_ok": peak <= ACX_PEAK_CEILING_DB,
         "noise_floor_ok": floor <= ACX_NOISE_FLOOR_DB,
+        "head_room_ok": ACX_HEAD_ROOM_MIN_SEC <= head <= ACX_HEAD_ROOM_MAX_SEC,
+        "tail_room_ok": ACX_TAIL_ROOM_MIN_SEC <= tail <= ACX_TAIL_ROOM_MAX_SEC,
+        "duration_ok": duration <= ACX_MAX_FILE_SEC,
     }
     return {
         "rms_db": rms,
         "peak_db": peak,
         "noise_floor_db": floor,
-        "duration_sec": float(np.asarray(wav).shape[0]) / sr if sr else 0.0,
+        "head_room_sec": head,
+        "tail_room_sec": tail,
+        "duration_sec": duration,
         **checks,
         "compliant": all(checks.values()),
     }
@@ -245,26 +295,46 @@ def trim_silence(
     all from a loud one.
     """
     wav = as_float_mono(wav)
-    if wav.size == 0:
+    bounds = speech_bounds(wav, sr, relative_db=relative_db, frame_ms=frame_ms)
+    if bounds is None:
         return wav
+
+    start, end = bounds
+    margin = int(sr * max(0.0, keep_ms) / 1000.0)
+    return wav[max(0, start - margin) : min(wav.size, end + margin)]
+
+
+def speech_bounds(
+    wav: np.ndarray,
+    sr: int,
+    *,
+    relative_db: float = 25.0,
+    frame_ms: float = 20.0,
+) -> Optional[Tuple[int, int]]:
+    """First and last sample carrying speech, or ``None`` if none does.
+
+    The threshold is relative to the signal's own speech level rather than an
+    absolute dBFS value, because segments arrive un-normalised and a fixed
+    threshold would either clip the start of a quiet one or trim nothing at all
+    from a loud one.
+    """
+    wav = as_float_mono(wav)
+    if wav.size == 0:
+        return None
 
     hop_ms = frame_ms / 2.0
     power = _frame_power(wav, sr, frame_ms, hop_ms)
     if power.size == 0:
-        return wav
+        return None
 
     threshold = 10.0 ** ((speech_rms_db(wav, sr) - relative_db) / 10.0)
     loud = np.flatnonzero(power > threshold)
     if loud.size == 0:
-        return wav
+        return None
 
     hop = max(1, int(sr * hop_ms / 1000.0))
     frame = max(1, int(sr * frame_ms / 1000.0))
-    margin = int(sr * max(0.0, keep_ms) / 1000.0)
-
-    start = max(0, int(loud[0]) * hop - margin)
-    end = min(wav.size, int(loud[-1]) * hop + frame + margin)
-    return wav[start:end]
+    return int(loud[0]) * hop, min(wav.size, int(loud[-1]) * hop + frame)
 
 
 def fade_edges(wav: np.ndarray, sr: int, fade_ms: float = 8.0) -> np.ndarray:

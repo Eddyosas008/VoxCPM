@@ -28,7 +28,7 @@ from narration import assemble as assembly
 from narration import audio as audio_tools
 from narration import cache as cache_tools
 from narration import epub as epub_reader
-from narration import chunking, quality, repair, text_fr
+from narration import chunking, credits, quality, repair, text_fr
 
 logging.basicConfig(
     level=logging.INFO,
@@ -215,6 +215,10 @@ _I18N_TRANSLATIONS = {
         "book_text_label": "Book text — separate chapters with a line containing only ---",
         "book_title_label": "Book title",
         "book_author_label": "Author / narrator",
+        "book_narrator_label": "Narrator named in the credits",
+        "book_narrator_info": "Left empty, the credits state that the reading is a synthetic voice — which is what distributors require.",
+        "book_credits_label": "Opening and closing credits",
+        "book_credits_info": "Distributors (ACX/Audible, Amazon, Apple Books) reject a recording that does not announce its title, author and narrator at both ends.",
         "book_plan_btn": "🔍 Analyse without generating",
         "book_plan_label": "Plan",
         "book_generate_btn": "📖 Narrate the book",
@@ -288,6 +292,10 @@ _I18N_TRANSLATIONS = {
         "book_text_label": "Texte du livre — séparez les chapitres par une ligne contenant seulement ---",
         "book_title_label": "Titre du livre",
         "book_author_label": "Auteur / narrateur",
+        "book_narrator_label": "Narrateur cité au générique",
+        "book_narrator_info": "Laissé vide, le générique indique que la lecture est une voix de synthèse — ce que les plateformes exigent.",
+        "book_credits_label": "Générique de début et de fin",
+        "book_credits_info": "Les distributeurs (ACX/Audible, Amazon, Apple Books) refusent un enregistrement qui n'annonce pas son titre, son auteur et son narrateur aux deux bouts.",
         "book_plan_btn": "🔍 Analyser sans générer",
         "book_plan_label": "Plan",
         "book_generate_btn": "📖 Narrer le livre",
@@ -993,12 +1001,39 @@ def create_demo_interface(demo: VoxCPMDemo):
         """Where a book's chapters and its resume cache live."""
         return _BOOKS_DIR / f"book_{_sanitize_filename(title or 'livre')}"
 
-    def _book_prepared_chapters(book_text: str, prepare: bool) -> List[str]:
+    def _book_credits(title, author, narrator, enabled: bool):
+        """The credits a distributor requires, or None when switched off."""
+        if not enabled:
+            return None
+        return credits.BookCredits(
+            title=(title or "").strip(),
+            author=(author or "").strip(),
+            narrator=(narrator or "").strip(),
+        )
+
+    def _book_prepared_chapters(
+        book_text: str, prepare: bool, book_credits=None
+    ) -> List[str]:
+        """Chapters as they will be narrated, credits included.
+
+        The credits are chapters like any other on purpose: they then take the
+        same French preparation, voice, seed and mastering as the book.
+        """
         chapters = chunking.split_chapters(book_text)
+        if book_credits is not None and chapters:
+            chapters = [book_credits.opening()] + chapters + [book_credits.closing()]
         if not prepare:
             return chapters
         lexicon = text_fr.load_lexicon(_LEXICON_PATH)
         return [text_fr.normalize_french(chapter, lexicon=lexicon) for chapter in chapters]
+
+    def _book_chapter_title(chapter: str, index: int, count: int, has_credits: bool) -> str:
+        """Marker title — the credits are named rather than quoted."""
+        if has_credits and index == 1:
+            return credits.OPENING_TITLE
+        if has_credits and index == count:
+            return credits.CLOSING_TITLE
+        return _chapter_title(chapter, index)
 
     def _book_profile(pause_sentence: float, pause_paragraph: float) -> chunking.PauseProfile:
         default = chunking.PauseProfile()
@@ -1008,9 +1043,20 @@ def create_demo_interface(demo: VoxCPMDemo):
             paragraph=float(pause_paragraph),
         )
 
-    def _book_plan(book_text, chunk_max_chars_value, prepare, pause_sentence, pause_paragraph):
+    def _book_plan(
+        book_text,
+        chunk_max_chars_value,
+        prepare,
+        pause_sentence,
+        pause_paragraph,
+        title="",
+        author="",
+        narrator="",
+        with_credits=True,
+    ):
         """Show what would be generated, without loading the model."""
-        chapters = _book_prepared_chapters(book_text, prepare)
+        book_credits = _book_credits(title, author, narrator, with_credits)
+        chapters = _book_prepared_chapters(book_text, prepare, book_credits)
         if not chapters:
             return "*Aucun texte à analyser.*"
 
@@ -1055,6 +1101,8 @@ def create_demo_interface(demo: VoxCPMDemo):
         pause_paragraph,
         preset_name,
         qc_retries,
+        narrator="",
+        with_credits=True,
         progress=gr.Progress(),
     ):
         """Narrate every chapter, writing each one to disk as soon as it is done.
@@ -1062,7 +1110,8 @@ def create_demo_interface(demo: VoxCPMDemo):
         Yields after each chapter so the UI shows progress on a job that runs for
         hours, and so a finished chapter is listenable before the book is.
         """
-        chapters = _book_prepared_chapters(book_text, prepare)
+        book_credits = _book_credits(title, author, narrator, with_credits)
+        chapters = _book_prepared_chapters(book_text, prepare, book_credits)
         if not chapters:
             raise gr.Error("Aucun texte à narrer. Chargez un fichier .txt ou collez le texte.")
 
@@ -1096,7 +1145,9 @@ def create_demo_interface(demo: VoxCPMDemo):
         chapter_plans = [
             repair.PlannedChapter(
                 index=index,
-                title=_chapter_title(chapter, index),
+                title=_book_chapter_title(
+                    chapter, index, len(chapters), book_credits is not None
+                ),
                 segments=tuple(
                     repair.PlannedSegment(segment.text, segment.pause_after)
                     for segment in chunking.split_into_segments(
@@ -1513,6 +1564,18 @@ def create_demo_interface(demo: VoxCPMDemo):
                         with gr.Row():
                             book_title = gr.Textbox(value="", label=I18N("book_title_label"))
                             book_author = gr.Textbox(value="", label=I18N("book_author_label"))
+                        with gr.Row():
+                            book_narrator = gr.Textbox(
+                                value="",
+                                label=I18N("book_narrator_label"),
+                                info=I18N("book_narrator_info"),
+                            )
+                            book_with_credits = gr.Checkbox(
+                                value=True,
+                                label=I18N("book_credits_label"),
+                                elem_classes=["switch-toggle"],
+                                info=I18N("book_credits_info"),
+                            )
 
                         # The book's own voice picker. Deliberately not a mirror
                         # of the Studio one: this dropdown is what the book is
@@ -1699,7 +1762,17 @@ def create_demo_interface(demo: VoxCPMDemo):
 
         book_plan_btn.click(
             fn=_book_plan,
-            inputs=[book_text, chunk_max_chars, book_prepare, book_pause_sentence, book_pause_paragraph],
+            inputs=[
+                book_text,
+                chunk_max_chars,
+                book_prepare,
+                book_pause_sentence,
+                book_pause_paragraph,
+                book_title,
+                book_author,
+                book_narrator,
+                book_with_credits,
+            ],
             outputs=[book_status],
             show_progress=False,
         )
@@ -1729,6 +1802,8 @@ def create_demo_interface(demo: VoxCPMDemo):
                 book_pause_paragraph,
                 book_preset_voice,
                 book_qc_retries,
+                book_narrator,
+                book_with_credits,
             ],
             outputs=[book_status, book_audio],
             show_progress=True,

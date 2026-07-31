@@ -64,7 +64,7 @@ import app  # noqa: E402
 from narration import assemble as assembly  # noqa: E402
 from narration import audio as audio_tools  # noqa: E402
 from narration import cache as cache_tools  # noqa: E402
-from narration import chunking, epub, quality, text_fr  # noqa: E402
+from narration import chunking, credits, epub, quality, text_fr  # noqa: E402
 
 #: Rough characters-per-second of finished narration, used only to estimate how
 #: long a book will run before committing hours of CPU to it.
@@ -147,8 +147,19 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true", help="Show the plan, generate nothing")
     run.add_argument("--assemble", nargs="?", const="m4b", choices=["m4b", "m4a", "mp3", "wav"],
                      help="Assemble the chapters into one chaptered file when done")
-    run.add_argument("--title", default="", help="Book title used for the assembled file")
-    run.add_argument("--author", default="", help="Author / narrator used for the assembled file")
+    run.add_argument("--title", default="", help="Book title (assembled file, and credits)")
+    run.add_argument("--author", default="", help="Author (assembled file, and credits)")
+
+    story = parser.add_argument_group("generique")
+    story.add_argument("--narrator", default="",
+                       help="Human narrator named in the credits. Left empty, the credits "
+                            "disclose a synthetic voice, as distributors require")
+    story.add_argument("--publisher", default="", help="Production credited at the end")
+    story.add_argument("--year", default="", help="Year credited at the end")
+    story.add_argument("--public-domain", action="store_true",
+                       help="State in the closing credits that the text is public domain")
+    story.add_argument("--no-credits", action="store_true",
+                       help="Do not add the opening and closing credits distributors require")
     run.add_argument("--continuity", action="store_true",
                      help="EXPERIMENTAL: chain each segment from the previous one (prompt-cache "
                           "continuation) for smoother joins, instead of same-seed only. Slower; "
@@ -187,6 +198,7 @@ def main() -> int:
         print(epub.summarize(book))
         print()
     else:
+        book = None
         raw_text = in_path.read_text(encoding="utf-8").strip()
     if not raw_text:
         raise SystemExit(f"Input file is empty: {in_path}")
@@ -197,6 +209,22 @@ def main() -> int:
     # ---- prepare -------------------------------------------------------
     raw_chapters = chunking.split_chapters(raw_text, args.chapter_regex)
     titles = [chapter_title(chapter, i) for i, chapter in enumerate(raw_chapters, 1)]
+
+    # Credits are chapters like any other, deliberately: they then go through
+    # the same French preparation, the same voice and seed, the same mastering
+    # and the same cache as the book, so they sound like the narrator rather
+    # than an announcement bolted on afterwards.
+    book_credits = credits.BookCredits(
+        title=args.title or (book.title if book else "") or in_path.stem,
+        author=args.author or (book.author if book else ""),
+        narrator=args.narrator,
+        publisher=args.publisher,
+        year=args.year,
+        public_domain=args.public_domain,
+    )
+    if not args.no_credits:
+        raw_chapters = [book_credits.opening()] + raw_chapters + [book_credits.closing()]
+        titles = [credits.OPENING_TITLE] + titles + [credits.CLOSING_TITLE]
 
     lexicon = {}
     if not args.no_text_prep:
@@ -224,6 +252,12 @@ def main() -> int:
     print(f"Préparation : {'désactivée' if args.no_text_prep else f'française ({len(lexicon)} entrée(s) de lexique)'}")
     print(f"Chapitres   : {len(chapters)} | segments : {total_segments} | caractères : {total_chars}")
     print(f"Durée estimée : ~{total_chars / _CHARS_PER_SECOND / 60:.0f} min de narration")
+    if args.no_credits:
+        print("Générique   : aucun (les distributeurs en exigent un au début et à la fin)")
+    else:
+        missing = book_credits.missing_for_distribution()
+        print("Générique   : début et fin ajoutés"
+              + (f" — manque encore {', '.join(missing)}" if missing else ""))
     print(f"Sortie      : {outdir}")
     for index, segments in plan:
         print(f"  chapitre {index:03d}: {len(segments)} segment(s)  « {titles[index - 1][:50]} »")

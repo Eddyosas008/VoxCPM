@@ -24,6 +24,7 @@ chacune dans un module de `narration/` — testable et utilisable indépendammen
 | Étape | Module | Ce qu'elle fait |
 |---|---|---|
 | **0. Lecture** | `narration/epub.py` | Lit un `.epub` dans l'ordre du *spine* et en tire des chapitres titrés — un `.txt` se découpe lui sur les lignes `---` |
+| **0 bis. Générique** | `narration/credits.py` | Ajoute au livre le générique de début et de fin qu'exigent les distributeurs, comme deux chapitres à part entière |
 | **1. Préparation** | `narration/text_fr.py` | Réécrit le texte tel qu'un narrateur le dirait : `1789` → « mille sept cent quatre-vingt-neuf », `M. Dupont` → « Monsieur Dupont », `XIVe siècle` → « quatorzième siècle », `14h30`, `1 250 €`, `3,5 %`… |
 | **2. Découpage** | `narration/chunking.py` | Coupe en segments sous la limite du moteur, **sans jamais couper une phrase**, et décide la durée du silence après chaque segment selon la ponctuation |
 | **3. Synthèse** | moteur VoxCPM2 | Même seed partout → voix identique du début à la fin |
@@ -263,6 +264,77 @@ Cette plage n'a **pas bougé** quand le jeu de voix est passé de sept à quator
 mêmes 15,8 et 24,1 aux deux extrémités. C'est ce qui lui donne du crédit — doubler
 l'échantillon n'a déplacé aucune borne. Un test verrouille chacune des valeurs
 mesurées, pour qu'un réglage ultérieur ne puisse pas les faire dériver sans alerte.
+
+## Générique de début et de fin
+
+Un livre audio n'est pas seulement le livre lu. **Tous les distributeurs** — ACX
+et Audible, et derrière eux Amazon, Apple Books, Kobo, Google Play — exigent que
+l'enregistrement s'annonce : le premier fichier ouvre sur le titre, l'auteur et
+le narrateur, le dernier les nomme à nouveau. Un dépôt sans générique est refusé
+au contrôle qualité avant même qu'on écoute une ligne du texte.
+
+Le générique est donc **ajouté par défaut**, comme deux chapitres à part entière :
+
+```
+chapitre_001.wav   Générique de début
+chapitre_002.wav   … le livre …
+chapitre_027.wav   Générique de fin
+```
+
+En faire des chapitres est délibéré : ils passent par la même préparation du
+texte, la **même voix et la même graine**, le même mastering et le même cache que
+le livre — ils sonnent donc comme le narrateur, pas comme une annonce rapportée.
+
+```
+.\.venv\Scripts\python.exe scripts\narrate_book.py livre.epub --voice "..." ^
+    --title "Autour de la Lune" --author "Jules Verne" --year 2026 --public-domain
+```
+
+| Option | Effet |
+|---|---|
+| `--narrator "Nom"` | Narrateur humain cité au générique |
+| `--publisher "Studio"` | Production créditée à la fin |
+| `--year 2026` | Année créditée à la fin |
+| `--public-domain` | Ajoute « Texte du domaine public » |
+| `--no-credits` | N'ajoute aucun générique |
+
+Ce que ça donne :
+
+> « Autour de la Lune », de Jules Verne.
+> Lu par une voix de synthèse.
+
+> Vous venez d'écouter « Autour de la Lune », de Jules Verne, lu par une voix de
+> synthèse. Enregistrement réalisé en deux mille vingt-six. Texte du domaine public.
+
+**La voix de synthèse est déclarée** quand aucun narrateur humain n'est nommé.
+Ce n'est pas une précaution ajoutée par prudence : Audible distribue ces titres
+via un programme séparé et les étiquette comme tels. Faire passer une lecture
+machine pour une performance humaine est ce qui fait fermer un compte. Nommer un
+narrateur avec `--narrator` remplace la mention.
+
+Le plan avant génération dit ce qu'il manque pour une distribution :
+
+```
+Générique   : début et fin ajoutés — manque encore l'auteur
+```
+
+## Forme des fichiers : ce qu'ACX vérifie en plus du niveau
+
+Un chapitre parfaitement calibré en sonie est quand même refusé s'il **commence
+sur la première syllabe**. La norme porte aussi sur la forme du fichier :
+
+| Contrôle | Norme ACX | Où c'est appliqué |
+|---|---|---|
+| Sonie (RMS) | −23 à −18 dBFS | mastering, une passe par chapitre |
+| Crête | ≤ −3 dBFS | mastering |
+| Bruit de fond | ≤ −60 dBFS | mesuré, reporté |
+| **Silence en tête** | **0,5 à 1 s** | 0,75 s posé par le mastering |
+| **Silence en queue** | **1 à 5 s** | 2 s posées par le mastering |
+| **Durée d'un fichier** | **≤ 120 min** | mesurée, reportée |
+
+`narration/audio.py` mesure les six et `acx_report()` dit lesquels passent. Les
+valeurs par défaut visent le **milieu** de chaque fenêtre, pas son bord : un
+chapitre reste conforme même si le rognage laisse un peu de silence à lui.
 
 ## Assemblage en un fichier unique
 

@@ -9,6 +9,7 @@ matters a lot on a CPU-only machine where model load alone takes minutes.
 Stages, in pipeline order::
 
     epub       read an .epub into the plain chapters everything else expects
+    credits    the opening and closing credits distributors require
     text_fr    prepare raw French prose for a TTS engine
     chunking   cut prepared text into engine-sized segments + pause plan
     cache      content-addressed store so an interrupted run resumes per chunk
@@ -23,6 +24,7 @@ __all__ = [
     "audio",
     "cache",
     "chunking",
+    "credits",
     "epub",
     "quality",
     "repair",
