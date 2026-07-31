@@ -49,6 +49,7 @@ Examples
 import argparse
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -147,6 +148,9 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true", help="Show the plan, generate nothing")
     run.add_argument("--assemble", nargs="?", const="m4b", choices=["m4b", "m4a", "mp3", "wav"],
                      help="Assemble the chapters into one chaptered file when done")
+    run.add_argument("--export-acx", action="store_true",
+                     help="Prepare the folder a distributor accepts (one file per chapter, "
+                          "192 kbps CBR MP3, retail sample) once the narration is done")
     run.add_argument("--title", default="", help="Book title (assembled file, and credits)")
     run.add_argument("--author", default="", help="Author (assembled file, and credits)")
 
@@ -448,13 +452,23 @@ def main() -> int:
         print(f"Durée totale : {result.duration_sec / 60:.1f} min")
         print(result.message)
         if result.pending_command:
-            import subprocess
-
             print("À exécuter une fois ffmpeg installé :")
             print("  " + subprocess.list2cmdline(result.pending_command))
     else:
         print("Astuce : ajoutez --assemble m4b pour produire un fichier unique avec chapitres, "
               "ou lancez scripts/assemble_audiobook.py plus tard.")
+
+    # ---- deliver -------------------------------------------------------
+    if args.export_acx:
+        # Run as a subprocess rather than imported: the exporter is a script in
+        # its own right, and a book that narrated for nine hours must not lose
+        # its chapters to an exception raised while preparing the delivery.
+        print()
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name("export_acx.py")), str(outdir)]
+        )
+        if result.returncode:
+            print("Export : des fichiers sont hors norme, voir ci-dessus.")
 
     if args.qc_strict and defective:
         print(f"--qc-strict : {defective} segment(s) toujours défectueux.")

@@ -28,7 +28,7 @@ from narration import assemble as assembly
 from narration import audio as audio_tools
 from narration import cache as cache_tools
 from narration import epub as epub_reader
-from narration import chunking, credits, quality, repair, text_fr
+from narration import chunking, credits, delivery, quality, repair, text_fr
 
 logging.basicConfig(
     level=logging.INFO,
@@ -223,6 +223,7 @@ _I18N_TRANSLATIONS = {
         "book_plan_label": "Plan",
         "book_generate_btn": "📖 Narrate the book",
         "book_assemble_btn": "📦 Assemble the audiobook",
+        "book_check_btn": "✅ Check against distribution standards",
         "book_format_label": "Format",
         "book_status_label": "Progress",
         "book_audio_label": "Last finished chapter",
@@ -300,6 +301,7 @@ _I18N_TRANSLATIONS = {
         "book_plan_label": "Plan",
         "book_generate_btn": "📖 Narrer le livre",
         "book_assemble_btn": "📦 Assembler le livre audio",
+        "book_check_btn": "✅ Vérifier la conformité de dépôt",
         "book_format_label": "Format",
         "book_status_label": "Avancement",
         "book_audio_label": "Dernier chapitre terminé",
@@ -1383,6 +1385,68 @@ def create_demo_interface(demo: VoxCPMDemo):
         delivered = result.output_path or result.wav_path
         return "\n".join(message), str(delivered)
 
+    def _book_check_delivery(title):
+        """Check the finished chapters against what a distributor accepts.
+
+        Reading only — no encoding, because ffmpeg may not be installed and
+        because the answer worth having before spending an evening on an
+        upload is *whether* the files pass, not the MP3s themselves.
+        """
+        outdir = _book_dir(title)
+        chapter_files = sorted(outdir.glob("chapitre_*.wav"))
+        if not chapter_files:
+            raise gr.Error(f"Aucun chapitre trouvé dans {outdir}. Lancez d'abord la narration.")
+
+        titles = []
+        titles_path = outdir / "titles.txt"
+        if titles_path.is_file():
+            # utf-8-sig: a titles.txt edited on Windows carries a byte order mark.
+            titles = [
+                line.strip()
+                for line in titles_path.read_text(encoding="utf-8-sig").splitlines()
+                if line.strip()
+            ]
+
+        profile = delivery.ACX_PROFILE
+        limit = delivery.max_seconds_for(profile)
+        rows, failing, total_sec = [], 0, 0.0
+        for index, path in enumerate(chapter_files, 1):
+            data, sample_rate = sf.read(str(path), dtype="float32")
+            parts = delivery.split_for_delivery(data, sample_rate, profile)
+            name = titles[index - 1] if index <= len(titles) else path.stem
+            for part_number, part in enumerate(parts, 1):
+                report = delivery.check_delivered(part, sample_rate, profile)
+                total_sec += report["duration_sec"]
+                suffix = f" (partie {part_number})" if len(parts) > 1 else ""
+                reasons = delivery.failures(report)
+                if reasons:
+                    failing += 1
+                rows.append(
+                    f"| {name[:40]}{suffix} | {report['duration_sec'] / 60:.1f} | "
+                    f"{report['rms_db']:.1f} | {report['head_room_sec']:.2f} | "
+                    f"{report['tail_room_sec']:.2f} | "
+                    f"{'✅' if not reasons else '❌ ' + ' ; '.join(reasons)} |"
+                )
+
+        header = [
+            f"### Conformité {profile.name} — {len(rows)} fichier(s), "
+            f"{total_sec / 60:.0f} min\n",
+            f"MP3 {profile.bitrate_kbps} kbps CBR · {profile.sample_rate} Hz · "
+            f"mono · ≤ {limit / 60:.0f} min par fichier\n",
+            "| Fichier | min | RMS dBFS | tête s | queue s | Verdict |",
+            "|---|---|---|---|---|---|",
+        ]
+        footer = (
+            f"\n**{failing} fichier(s) hors norme.**"
+            if failing
+            else "\n**Tous les fichiers satisfont la norme.**"
+        )
+        footer += (
+            "\n\nPour produire le dossier à déposer (MP3 encodés + extrait commercial) :\n\n"
+            f"```\npython scripts/export_acx.py {outdir}\n```"
+        )
+        return "\n".join(header + rows) + footer
+
     def _on_toggle_instant(checked):
         """Instant UI toggle — no ASR, no blocking."""
         if checked:
@@ -1652,6 +1716,7 @@ def create_demo_interface(demo: VoxCPMDemo):
                                 scale=1,
                             )
                             book_assemble_btn = gr.Button(I18N("book_assemble_btn"), scale=2)
+                            book_check_btn = gr.Button(I18N("book_check_btn"), scale=2)
 
                         with gr.Accordion(I18N("book_repair_title"), open=False):
                             gr.Markdown(I18N("book_repair_info"))
@@ -1843,6 +1908,14 @@ def create_demo_interface(demo: VoxCPMDemo):
             outputs=[book_repair_status, book_audio],
             show_progress=True,
             api_name="repair_book_segment",
+        )
+
+        book_check_btn.click(
+            fn=_book_check_delivery,
+            inputs=[book_title],
+            outputs=[book_status],
+            show_progress=True,
+            api_name="check_delivery",
         )
 
         book_assemble_btn.click(

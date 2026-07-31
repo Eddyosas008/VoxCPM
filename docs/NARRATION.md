@@ -82,7 +82,9 @@ lancer l'app (ou export sous bash).
    abréviation mal interprétés — avant d'engager des heures de calcul.
 4. Clique **« 📖 Narrer le livre »**. Chaque chapitre terminé est écrit sur disque
    et devient écoutable immédiatement ; l'avancement s'affiche au fur et à mesure.
-5. Clique **« 📦 Assembler le livre audio »** pour obtenir un fichier unique.
+5. Clique **« 📦 Assembler le livre audio »** pour obtenir un fichier unique,
+   et **« ✅ Vérifier la conformité de dépôt »** pour savoir, chapitre par
+   chapitre, ce qu'un distributeur accepterait ou renverrait.
 
 ### 2. Script `narrate_book.py` — pour un livre entier en ligne de commande
 
@@ -364,6 +366,10 @@ détails qui n'ont rien à voir avec la qualité de la narration.
 ```
 .\.venv\Scripts\python.exe scripts\export_acx.py output\book_mon_livre
 ```
+
+Ou d'un seul trait depuis le texte : ajoute `--export-acx` à `narrate_book.py`.
+Le contrôle seul, sans rien produire, est aussi dans l'onglet **📚 Livre audio**,
+bouton **« ✅ Vérifier la conformité de dépôt »**.
 
 ```
 output/book_mon_livre/          ->   output/book_mon_livre/acx/

@@ -92,6 +92,28 @@ class TestCreditsCanBeRefused:
         assert "Vous venez d'écouter" not in spoken
 
 
+class TestChainedExport:
+    def test_export_acx_produces_the_delivery_folder(self, monkeypatch, book, tmp_path):
+        """One command from text to the folder that gets uploaded."""
+        outdir = tmp_path / "out"
+        run(monkeypatch, book, outdir, "--title", "Le Livre", "--export-acx")
+
+        acx = outdir / "acx"
+        assert acx.is_dir()
+        assert (acx / "rapport_acx.json").is_file()
+
+    def test_a_failed_export_does_not_lose_the_chapters(self, monkeypatch, book, tmp_path):
+        """Nine hours of narration must survive anything the exporter does."""
+        outdir = tmp_path / "out"
+        monkeypatch.setattr(
+            narrate_book.subprocess,
+            "run",
+            lambda *a, **k: type("Result", (), {"returncode": 1})(),
+        )
+        assert run(monkeypatch, book, outdir, "--title", "Le Livre", "--export-acx") == 0
+        assert sorted(outdir.glob("chapitre_*.wav"))
+
+
 class TestDeliveredShape:
     """Every written file has to satisfy ACX on shape, not only on level."""
 
