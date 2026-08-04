@@ -125,6 +125,36 @@ Deux options utiles dans les **Réglages avancés** :
 - **Préparation du texte français** — applique l'étape 1 de la chaîne.
 - **Mastering livre audio** — applique l'étape 4 (activé par défaut).
 
+## Narrer dans une voix clonée
+
+Le moteur sait cloner une voix depuis un enregistrement, mais seul l'onglet
+Studio y avait accès — donc pour un extrait, jamais pour un livre. C'est branché
+dans la narration longue :
+
+```
+scripts\narrate_book.py livre.epub --reference-audio ma_voix.wav ^
+    --reference-text "le texte exact prononcé dans l'enregistrement"
+```
+
+`--reference-audio` remplace `--voice` et `--description` : un enregistrement est
+une réponse complète à la question « quelle voix ? ».
+
+**Ce qu'il faut enregistrer** : un extrait **court et très propre** vaut mieux
+qu'un long avec du souffle. Le débruiteur n'est pas chargé pendant la narration
+(il bloque au téléchargement depuis cette machine), donc **ce qui est dans le
+fichier est ce qui sera copié** — respiration, écho de la pièce, ventilateur
+compris. Et c'est cette voix qui portera le livre pendant des heures : lis un
+passage au rythme et sur le ton que tu veux entendre, pas une phrase neutre.
+
+`--reference-text` est facultatif et vaut le coup : le moteur met les mots en
+face de l'audio et clone plus fidèlement.
+
+**Le cache suit la voix.** L'empreinte qui adresse un segment inclut un **hachage
+du contenu** de l'enregistrement, pas son chemin. Deux conséquences voulues :
+réenregistrer dans le même fichier ne ressert pas l'ancienne voix, et déplacer le
+fichier ne jette pas le cache. Un même passage cloné et décrit ne peuvent pas se
+confondre en cache.
+
 ## Narrer en anglais
 
 `--language en` (ou le menu **Langue du livre** dans l'onglet) bascule deux choses :

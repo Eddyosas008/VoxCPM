@@ -105,6 +105,14 @@ def build_parser() -> argparse.ArgumentParser:
     voice.add_argument("--seed", type=int, help="Seed for the custom voice (fixes the voice identity)")
     voice.add_argument("--cfg", type=float, default=2.0, help="CFG guidance scale (default: 2.0)")
     voice.add_argument("--steps", type=int, default=10, help="Diffusion steps (default: 10)")
+    voice.add_argument("--reference-audio", metavar="WAV",
+                       help="Clone a voice from this recording instead of describing one. "
+                            "A short, clean take beats a long noisy one — the denoiser is "
+                            "off during narration, so what is in the file is what is copied")
+    voice.add_argument("--reference-text",
+                       help="Exact transcript of --reference-audio. Optional, and worth "
+                            "giving: the engine matches the words to the audio and clones "
+                            "more faithfully with it")
 
     text = parser.add_argument_group("texte")
     text.add_argument("--language", choices=["fr", "en"], default="fr",
@@ -197,8 +205,13 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
 
-    if not args.voice and not args.description:
-        raise SystemExit("Provide either --voice <preset name> or --description <text> [--seed N].")
+    if not args.voice and not args.description and not args.reference_audio:
+        raise SystemExit(
+            "Provide either --voice <preset name>, --description <text> [--seed N], "
+            "or --reference-audio <wav> to clone a voice."
+        )
+    if args.reference_audio and not Path(args.reference_audio).is_file():
+        raise SystemExit(f"Reference audio not found: {args.reference_audio}")
 
     in_path = Path(args.input)
     if not in_path.is_file():
@@ -271,7 +284,11 @@ def main() -> int:
     total_chars = sum(chunking.total_characters(segments) for _, segments in plan)
 
     print(f"Entrée      : {in_path}")
-    print(f"Voix        : {args.voice or '(personnalisée)'} | seed={seed}")
+    if args.reference_audio:
+        print(f"Voix        : clonée de {Path(args.reference_audio).name}"
+              + (" (avec transcription)" if args.reference_text else " (sans transcription)"))
+    else:
+        print(f"Voix        : {args.voice or '(personnalisée)'} | seed={seed}")
     print(f"Préparation : {'désactivée' if args.no_text_prep else f'française ({len(lexicon)} entrée(s) de lexique)'}")
     print(f"Chapitres   : {len(chapters)} | segments : {total_segments} | caractères : {total_chars}")
     print(f"Durée estimée : ~{total_chars / _CHARS_PER_SECOND / 60:.0f} min de narration")
@@ -303,6 +320,10 @@ def main() -> int:
         steps=args.steps,
         normalize=not args.no_normalize,
         model_id=args.model_id,
+        # Hashed by content: the cache must not serve a segment spoken by a
+        # different recording that happened to live at the same path.
+        reference=cache_tools.VoiceSpec.hash_reference(args.reference_audio),
+        reference_text=(args.reference_text or "").strip(),
     )
     cache = cache_tools.ChunkCache(outdir / ".cache", enabled=not args.no_cache)
     mastering = audio_tools.MasteringSettings(
@@ -377,9 +398,12 @@ def main() -> int:
                         sr, wav_out, _ = demo.generate_tts_audio(
                             text_input=_segment.text,
                             control_instruction=description,
+                            reference_wav_path_input=args.reference_audio,
+                            prompt_text=(args.reference_text or ""),
                             cfg_value_input=args.cfg,
                             do_normalize=not args.no_normalize,
                             inference_timesteps=args.steps,
+                            denoise=False,
                             seed=current_seed,
                         )
                     return sr, wav_out

@@ -79,6 +79,14 @@ class QualityThresholds:
 
     The range held exactly when the voice set grew from seven to fourteen, which
     is the reason to trust it: doubling the sample moved neither end.
+
+    **English was measured too, and needs no bounds of its own.** The same four
+    voices reading a sentence of the same length come back at 14.7 to 17.7
+    characters per second against 17.4 to 20.9 in French — around a tenth
+    slower, and the nearest limit is still more than twice away. Adding a
+    language knob here would be configuration for a difference that does not
+    exist, so there is none; if a language ever does fall outside, these numbers
+    are what to compare its measurement against.
     """
 
     #: Median measured across the preset voices. Explains a report, and breaks
