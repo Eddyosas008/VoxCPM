@@ -213,9 +213,16 @@ class TestStitch:
         assert audio.speech_rms_db(result, SR) == pytest.approx(-20.0, abs=0.5)
 
     def test_normalization_can_be_skipped(self):
+        # Polish off as well: the studio chain deliberately changes the level
+        # before the normalisation does, and what is under test here is only
+        # that the normalisation itself can be skipped.
         loud = sine(1.0, amplitude=0.5)
-        result = audio.stitch([(loud, 0.0)], SR, audio.MasteringSettings(trim_silence=False),
-                              normalize=False)
+        result = audio.stitch(
+            [(loud, 0.0)],
+            SR,
+            audio.MasteringSettings(trim_silence=False, polish=False),
+            normalize=False,
+        )
         assert audio.peak_db(result) == pytest.approx(audio.peak_db(loud), abs=0.1)
 
     def test_no_segments(self):

@@ -139,6 +139,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Loudness target in dBFS (ACX window is -23..-18, default: -20)")
     pauses.add_argument("--no-master", action="store_true",
                         help="Skip trimming, de-clicking and loudness normalization")
+    pauses.add_argument("--no-polish", action="store_true",
+                        help="Skip the studio chain (high-pass, de-esser, compressor, limiter) "
+                             "applied to each chapter before its level is set")
 
     run = parser.add_argument_group("exécution")
     run.add_argument("--outdir", help="Output directory (default: output/book_<filename>)")
@@ -294,7 +297,9 @@ def main() -> int:
         model_id=args.model_id,
     )
     cache = cache_tools.ChunkCache(outdir / ".cache", enabled=not args.no_cache)
-    mastering = audio_tools.MasteringSettings(target_rms_db=args.target_rms)
+    mastering = audio_tools.MasteringSettings(
+        target_rms_db=args.target_rms, polish=not args.no_polish
+    )
 
     # The plan is what makes a later repair possible: without it, which cache
     # entry holds which sentence is lost the moment this run ends. Written

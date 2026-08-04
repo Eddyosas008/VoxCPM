@@ -100,6 +100,11 @@ class MasteringSettings:
     #: silence of its own.
     lead_sec: float = 0.75
     tail_sec: float = 2.0
+    #: Run the studio chain — high-pass, de-esser, compressor — over the
+    #: assembled chapter before its level is set. A plain bool rather than the
+    #: settings themselves, so a saved plan stays a flat JSON object; the
+    #: amounts are passed to :func:`stitch` separately when they need changing.
+    polish: bool = True
 
 
 # --------------------------------------------------------------------------
@@ -244,6 +249,8 @@ def acx_report(wav: np.ndarray, sr: int) -> dict:
     still be rejected for opening on its first syllable or running past two
     hours, so both are reported side by side.
     """
+    from . import polish as polish_tools  # circular at module scope, see stitch
+
     rms = speech_rms_db(wav, sr)
     peak = peak_db(wav)
     floor = noise_floor_db(wav, sr)
@@ -261,6 +268,10 @@ def acx_report(wav: np.ndarray, sr: int) -> dict:
         "rms_db": rms,
         "peak_db": peak,
         "noise_floor_db": floor,
+        # Reported, never gated on: ACX states its limits in RMS, while the
+        # streaming platforms normalise in LUFS and disagree on the target.
+        # Inventing a pass/fail no standard states would be worse than a number.
+        "lufs": polish_tools.loudness_lufs(wav, sr),
         "head_room_sec": head,
         "tail_room_sec": tail,
         "duration_sec": duration,
@@ -420,12 +431,14 @@ def stitch(
     settings: MasteringSettings = MasteringSettings(),
     *,
     normalize: bool = True,
+    polish_settings=None,
 ) -> np.ndarray:
     """Assemble ``(audio, pause_after_seconds)`` pairs into one mastered chapter.
 
     Each segment is trimmed and faded, the requested pause is inserted after it,
-    and the finished chapter is normalised once so the level is consistent from
-    the first word to the last.
+    the studio chain runs over the whole chapter, and only then is it normalised
+    — once, so the level is consistent from the first word to the last, and so
+    that nothing after the levelling can move it again.
     """
     if not segments:
         return np.zeros(0, dtype=np.float32)
@@ -446,6 +459,16 @@ def stitch(
         pieces.append(silence(sr, settings.tail_sec))
 
     chapter = np.concatenate(pieces) if pieces else np.zeros(0, dtype=np.float32)
+
+    if settings.polish and chapter.size:
+        # Imported here rather than at module scope: polish builds on this
+        # module, and importing it at the top would close the circle.
+        from . import polish as polish_tools
+
+        chapter = polish_tools.polish(
+            chapter, sr, polish_settings or polish_tools.PolishSettings()
+        )
+
     if normalize and chapter.size:
         chapter, _ = normalize_level(
             chapter,

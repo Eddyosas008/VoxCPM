@@ -235,6 +235,8 @@ _I18N_TRANSLATIONS = {
         "book_target_rms_info": "Audiobook platforms expect RMS between -23 and -18 dBFS.",
         "book_pause_sentence_label": "Pause after a sentence (s)",
         "book_pause_paragraph_label": "Pause after a paragraph (s)",
+        "book_polish_label": "Studio chain",
+        "book_polish_info": "High-pass, de-esser, compressor and limiter over each chapter before its level is set — what a listener hears, beyond the levels a distributor checks.",
         "book_repair_title": "🔧 Repair a flagged segment",
         "book_repair_info": "Re-generate a single defective segment and restitch its chapter "
                             "from the cache. The other segments are never re-synthesized.",
@@ -315,6 +317,8 @@ _I18N_TRANSLATIONS = {
         "book_target_rms_info": "Les plateformes de livres audio attendent un RMS entre -23 et -18 dBFS.",
         "book_pause_sentence_label": "Pause après une phrase (s)",
         "book_pause_paragraph_label": "Pause après un paragraphe (s)",
+        "book_polish_label": "Chaîne studio",
+        "book_polish_info": "Passe-haut, dé-esseur, compresseur et limiteur sur chaque chapitre avant le calage du niveau — ce que l'auditeur entend, au-delà des niveaux que contrôle un distributeur.",
         "book_repair_title": "🔧 Réparer un segment signalé",
         "book_repair_info": "Régénère un seul segment défectueux et reconstruit son chapitre "
                             "à partir du cache. Les autres segments ne sont jamais recalculés.",
@@ -1121,6 +1125,7 @@ def create_demo_interface(demo: VoxCPMDemo):
         qc_retries,
         narrator="",
         with_credits=True,
+        polish_on=True,
         progress=gr.Progress(),
     ):
         """Narrate every chapter, writing each one to disk as soon as it is done.
@@ -1145,7 +1150,9 @@ def create_demo_interface(demo: VoxCPMDemo):
         outdir = _book_dir(title)
         outdir.mkdir(parents=True, exist_ok=True)
         profile = _book_profile(pause_sentence, pause_paragraph)
-        mastering = audio_tools.MasteringSettings(target_rms_db=float(target_rms))
+        mastering = audio_tools.MasteringSettings(
+            target_rms_db=float(target_rms), polish=bool(polish_on)
+        )
         voice_spec = cache_tools.VoiceSpec(
             description=description,
             seed=seed,
@@ -1705,6 +1712,12 @@ def create_demo_interface(demo: VoxCPMDemo):
                                 step=0.05,
                                 label=I18N("book_pause_sentence_label"),
                             )
+                            book_polish = gr.Checkbox(
+                                value=True,
+                                label=I18N("book_polish_label"),
+                                elem_classes=["switch-toggle"],
+                                info=I18N("book_polish_info"),
+                            )
                             book_pause_paragraph = gr.Slider(
                                 minimum=0.0,
                                 maximum=3.0,
@@ -1896,6 +1909,7 @@ def create_demo_interface(demo: VoxCPMDemo):
                 book_qc_retries,
                 book_narrator,
                 book_with_credits,
+                book_polish,
             ],
             outputs=[book_status, book_audio],
             show_progress=True,

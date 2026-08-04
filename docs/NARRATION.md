@@ -29,6 +29,7 @@ chacune dans un module de `narration/` — testable et utilisable indépendammen
 | **2. Découpage** | `narration/chunking.py` | Coupe en segments sous la limite du moteur, **sans jamais couper une phrase**, et décide la durée du silence après chaque segment selon la ponctuation |
 | **3. Synthèse** | moteur VoxCPM2 | Même seed partout → voix identique du début à la fin |
 | **4. Mastering** | `narration/audio.py` | Rogne les silences parasites, supprime les clics aux jointures, insère les pauses, normalise la sonie **une fois par chapitre** |
+| **4 bis. Chaîne studio** | `narration/polish.py` | Passe-haut à 80 Hz, dé-esseur, compresseur et limiteur avant le calage du niveau — et mesure de la sonie en **LUFS** (EBU R128), la norme des plateformes de streaming |
 | **5. Assemblage** | `narration/assemble.py` | Réunit les chapitres en un seul M4B/MP3 avec marqueurs de chapitres |
 | **6. Livraison** | `narration/delivery.py` | Découpe, échantillonne et encode les fichiers qu'un distributeur accepte (MP3 192 kbps CBR, 44,1 kHz) |
 
@@ -320,6 +321,45 @@ Le plan avant génération dit ce qu'il manque pour une distribution :
 ```
 Générique   : début et fin ajoutés — manque encore l'auteur
 ```
+
+## La chaîne studio : ce que le distributeur ne contrôle pas
+
+Les niveaux ACX disent qu'un chapitre est *acceptable*. Ils ne disent rien de ce
+qu'on entend. Quatre traitements tournent donc sur chaque chapitre assemblé,
+**avant** le calage du niveau (`--no-polish`, ou la case « Chaîne studio ») :
+
+| Étage | Pourquoi |
+|---|---|
+| **Passe-haut à 80 Hz** | Sous 80 Hz il n'y a rien d'une voix, mais du grondement qui mange de la marge et fatigue au casque |
+| **Dé-esseur** | Les sifflantes sont le premier défaut qui trahit une voix de synthèse en français |
+| **Compresseur** | Un livre audio s'écoute en marchant, en voiture : l'écart entre une phrase murmurée et une phrase appuyée doit se resserrer |
+| **Limiteur** | Sans lui, le compresseur **dégrade** le résultat — voir plus bas |
+
+**Le limiteur n'était pas prévu, la mesure l'a imposé.** Le compresseur seul baisse
+les tenues sans toucher les crêtes courtes : le facteur de crête *monte* (17,7 →
+19,0 dB mesuré sur un vrai chapitre), et le plafond de −3 dBFS oblige alors la
+normalisation à reculer, faisant perdre 1,3 LU à tout le chapitre pour quelques
+échantillons. Tenir les crêtes est ce qui permet au reste de sonner à son niveau.
+
+Mesuré sur les trois chapitres d'un livre réellement narré :
+
+| | crête/RMS | bande sifflante | sonie |
+|---|---|---|---|
+| Générique de début | 17,7 → **14,4 dB** | −13,9 → **−17,8 dB** | −20,98 → −20,52 LUFS |
+| Le texte | 14,4 → 14,4 dB | −14,0 → **−15,3 dB** | −20,27 → −19,64 LUFS |
+| Générique de fin | 14,7 → **14,0 dB** | −23,4 → **−25,9 dB** | −20,96 → −20,94 LUFS |
+
+### La sonie en LUFS
+
+ACX raisonne en RMS ; **Spotify, Apple Books et YouTube normalisent en LUFS**
+(ITU-R BS.1770 / EBU R128), qui pondère le spectre comme l'oreille. Un chapitre
+parfaitement calé à −20 dBFS RMS peut arriver trop fort ou trop faible chez eux, et
+rien dans le rapport ACX ne l'aurait dit. La mesure est donc ajoutée au rapport —
+**reportée, jamais éliminatoire** : aucune norme ne fixe une cible unique, et
+inventer un seuil que personne n'exige serait pire que donner le chiffre.
+
+L'implémentation a été **confrontée à ffmpeg** (`-af ebur128`) sur de vrais
+chapitres : −20,98 contre −20,9 ; −20,27 contre −20,2 ; −20,96 contre −20,9.
 
 ## Forme des fichiers : ce qu'ACX vérifie en plus du niveau
 
