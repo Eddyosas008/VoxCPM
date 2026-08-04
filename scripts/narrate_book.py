@@ -66,7 +66,7 @@ import app  # noqa: E402
 from narration import assemble as assembly  # noqa: E402
 from narration import audio as audio_tools  # noqa: E402
 from narration import cache as cache_tools  # noqa: E402
-from narration import chunking, credits, epub, quality, repair, text_fr  # noqa: E402
+from narration import chunking, credits, epub, quality, repair, text_en, text_fr  # noqa: E402
 
 #: Rough characters-per-second of finished narration, used only to estimate how
 #: long a book will run before committing hours of CPU to it.
@@ -107,6 +107,9 @@ def build_parser() -> argparse.ArgumentParser:
     voice.add_argument("--steps", type=int, default=10, help="Diffusion steps (default: 10)")
 
     text = parser.add_argument_group("texte")
+    text.add_argument("--language", choices=["fr", "en"], default="fr",
+                      help="Language of the book: picks the text preparation and the "
+                           "wording of the credits (default: fr)")
     text.add_argument("--no-text-prep", action="store_true",
                       help="Skip French normalization (numbers, abbreviations, Roman numerals)")
     text.add_argument("--lexicon", default="conf/pronunciation_fr.json",
@@ -236,15 +239,20 @@ def main() -> int:
         publisher=args.publisher,
         year=args.year,
         public_domain=args.public_domain,
+        language=args.language,
     )
     if not args.no_credits:
+        opening_title, closing_title = credits.titles_for(args.language)
         raw_chapters = [book_credits.opening()] + raw_chapters + [book_credits.closing()]
-        titles = [credits.OPENING_TITLE] + titles + [credits.CLOSING_TITLE]
+        titles = [opening_title] + titles + [closing_title]
 
     lexicon = {}
     if not args.no_text_prep:
         lexicon = text_fr.load_lexicon(args.lexicon)
-        chapters = [text_fr.normalize_french(chapter, lexicon=lexicon) for chapter in raw_chapters]
+        prepare = (
+            text_en.normalize_english if args.language == "en" else text_fr.normalize_french
+        )
+        chapters = [prepare(chapter, lexicon=lexicon) for chapter in raw_chapters]
     else:
         chapters = raw_chapters
 

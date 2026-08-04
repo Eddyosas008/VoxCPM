@@ -28,7 +28,7 @@ from narration import assemble as assembly
 from narration import audio as audio_tools
 from narration import cache as cache_tools
 from narration import epub as epub_reader
-from narration import chunking, credits, delivery, quality, repair, text_fr
+from narration import chunking, credits, delivery, quality, repair, text_en, text_fr
 
 logging.basicConfig(
     level=logging.INFO,
@@ -215,6 +215,8 @@ _I18N_TRANSLATIONS = {
         "book_text_label": "Book text — separate chapters with a line containing only ---",
         "book_title_label": "Book title",
         "book_author_label": "Author / narrator",
+        "book_language_label": "Language of the book",
+        "book_language_info": "Chooses the text preparation (numbers, abbreviations) and the wording of the credits.",
         "book_narrator_label": "Narrator named in the credits",
         "book_narrator_info": "Left empty, the credits state that the reading is a synthetic voice — which is what distributors require.",
         "book_credits_label": "Opening and closing credits",
@@ -297,6 +299,8 @@ _I18N_TRANSLATIONS = {
         "book_text_label": "Texte du livre — séparez les chapitres par une ligne contenant seulement ---",
         "book_title_label": "Titre du livre",
         "book_author_label": "Auteur / narrateur",
+        "book_language_label": "Langue du livre",
+        "book_language_info": "Détermine la préparation du texte (nombres, abréviations) et la formulation du générique.",
         "book_narrator_label": "Narrateur cité au générique",
         "book_narrator_info": "Laissé vide, le générique indique que la lecture est une voix de synthèse — ce que les plateformes exigent.",
         "book_credits_label": "Générique de début et de fin",
@@ -1023,7 +1027,7 @@ def create_demo_interface(demo: VoxCPMDemo):
         """Where a book's chapters and its resume cache live."""
         return _BOOKS_DIR / f"book_{_sanitize_filename(title or 'livre')}"
 
-    def _book_credits(title, author, narrator, enabled: bool):
+    def _book_credits(title, author, narrator, enabled: bool, language: str = "fr"):
         """The credits a distributor requires, or None when switched off."""
         if not enabled:
             return None
@@ -1031,10 +1035,11 @@ def create_demo_interface(demo: VoxCPMDemo):
             title=(title or "").strip(),
             author=(author or "").strip(),
             narrator=(narrator or "").strip(),
+            language=language,
         )
 
     def _book_prepared_chapters(
-        book_text: str, prepare: bool, book_credits=None
+        book_text: str, prepare: bool, book_credits=None, language: str = "fr"
     ) -> List[str]:
         """Chapters as they will be narrated, credits included.
 
@@ -1047,14 +1052,20 @@ def create_demo_interface(demo: VoxCPMDemo):
         if not prepare:
             return chapters
         lexicon = text_fr.load_lexicon(_LEXICON_PATH)
-        return [text_fr.normalize_french(chapter, lexicon=lexicon) for chapter in chapters]
+        normalize = (
+            text_en.normalize_english if language == "en" else text_fr.normalize_french
+        )
+        return [normalize(chapter, lexicon=lexicon) for chapter in chapters]
 
-    def _book_chapter_title(chapter: str, index: int, count: int, has_credits: bool) -> str:
+    def _book_chapter_title(
+        chapter: str, index: int, count: int, has_credits: bool, language: str = "fr"
+    ) -> str:
         """Marker title — the credits are named rather than quoted."""
+        opening_title, closing_title = credits.titles_for(language)
         if has_credits and index == 1:
-            return credits.OPENING_TITLE
+            return opening_title
         if has_credits and index == count:
-            return credits.CLOSING_TITLE
+            return closing_title
         return _chapter_title(chapter, index)
 
     def _book_profile(pause_sentence: float, pause_paragraph: float) -> chunking.PauseProfile:
@@ -1075,10 +1086,11 @@ def create_demo_interface(demo: VoxCPMDemo):
         author="",
         narrator="",
         with_credits=True,
+        language="fr",
     ):
         """Show what would be generated, without loading the model."""
-        book_credits = _book_credits(title, author, narrator, with_credits)
-        chapters = _book_prepared_chapters(book_text, prepare, book_credits)
+        book_credits = _book_credits(title, author, narrator, with_credits, language)
+        chapters = _book_prepared_chapters(book_text, prepare, book_credits, language)
         if not chapters:
             return "*Aucun texte à analyser.*"
 
@@ -1126,6 +1138,7 @@ def create_demo_interface(demo: VoxCPMDemo):
         narrator="",
         with_credits=True,
         polish_on=True,
+        language="fr",
         progress=gr.Progress(),
     ):
         """Narrate every chapter, writing each one to disk as soon as it is done.
@@ -1133,8 +1146,8 @@ def create_demo_interface(demo: VoxCPMDemo):
         Yields after each chapter so the UI shows progress on a job that runs for
         hours, and so a finished chapter is listenable before the book is.
         """
-        book_credits = _book_credits(title, author, narrator, with_credits)
-        chapters = _book_prepared_chapters(book_text, prepare, book_credits)
+        book_credits = _book_credits(title, author, narrator, with_credits, language)
+        chapters = _book_prepared_chapters(book_text, prepare, book_credits, language)
         if not chapters:
             raise gr.Error("Aucun texte à narrer. Chargez un fichier .txt ou collez le texte.")
 
@@ -1171,7 +1184,7 @@ def create_demo_interface(demo: VoxCPMDemo):
             repair.PlannedChapter(
                 index=index,
                 title=_book_chapter_title(
-                    chapter, index, len(chapters), book_credits is not None
+                    chapter, index, len(chapters), book_credits is not None, language
                 ),
                 segments=tuple(
                     repair.PlannedSegment(segment.text, segment.pause_after)
@@ -1656,6 +1669,12 @@ def create_demo_interface(demo: VoxCPMDemo):
                             book_title = gr.Textbox(value="", label=I18N("book_title_label"))
                             book_author = gr.Textbox(value="", label=I18N("book_author_label"))
                         with gr.Row():
+                            book_language = gr.Dropdown(
+                                choices=[("Français", "fr"), ("English", "en")],
+                                value="fr",
+                                label=I18N("book_language_label"),
+                                info=I18N("book_language_info"),
+                            )
                             book_narrator = gr.Textbox(
                                 value="",
                                 label=I18N("book_narrator_label"),
@@ -1877,6 +1896,7 @@ def create_demo_interface(demo: VoxCPMDemo):
                 book_author,
                 book_narrator,
                 book_with_credits,
+                book_language,
             ],
             outputs=[book_status],
             show_progress=False,
@@ -1910,6 +1930,7 @@ def create_demo_interface(demo: VoxCPMDemo):
                 book_narrator,
                 book_with_credits,
                 book_polish,
+                book_language,
             ],
             outputs=[book_status, book_audio],
             show_progress=True,

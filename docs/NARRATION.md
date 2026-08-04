@@ -25,7 +25,7 @@ chacune dans un module de `narration/` — testable et utilisable indépendammen
 |---|---|---|
 | **0. Lecture** | `narration/epub.py` | Lit un `.epub` dans l'ordre du *spine* et en tire des chapitres titrés — un `.txt` se découpe lui sur les lignes `---` |
 | **0 bis. Générique** | `narration/credits.py` | Ajoute au livre le générique de début et de fin qu'exigent les distributeurs, comme deux chapitres à part entière |
-| **1. Préparation** | `narration/text_fr.py` | Réécrit le texte tel qu'un narrateur le dirait : `1789` → « mille sept cent quatre-vingt-neuf », `M. Dupont` → « Monsieur Dupont », `XIVe siècle` → « quatorzième siècle », `14h30`, `1 250 €`, `3,5 %`… |
+| **1. Préparation** | `narration/text_fr.py` ou `text_en.py` | Réécrit le texte tel qu'un narrateur le dirait : `1789` → « mille sept cent quatre-vingt-neuf », `M. Dupont` → « Monsieur Dupont », `XIVe siècle` → « quatorzième siècle », `14h30`, `1 250 €`, `3,5 %`… |
 | **2. Découpage** | `narration/chunking.py` | Coupe en segments sous la limite du moteur, **sans jamais couper une phrase**, et décide la durée du silence après chaque segment selon la ponctuation |
 | **3. Synthèse** | moteur VoxCPM2 | Même seed partout → voix identique du début à la fin |
 | **4. Mastering** | `narration/audio.py` | Rogne les silences parasites, supprime les clics aux jointures, insère les pauses, normalise la sonie **une fois par chapitre** |
@@ -124,6 +124,42 @@ Deux options utiles dans les **Réglages avancés** :
 
 - **Préparation du texte français** — applique l'étape 1 de la chaîne.
 - **Mastering livre audio** — applique l'étape 4 (activé par défaut).
+
+## Narrer en anglais
+
+`--language en` (ou le menu **Langue du livre** dans l'onglet) bascule deux choses :
+la préparation du texte et la formulation du générique.
+
+```
+.\.venv\Scripts\python.exe scripts\narrate_book.py book.epub --language en ^
+    --voice "..." --title "Around the Moon" --author "Jules Verne"
+```
+
+L'anglais a ses propres irrégularités, et `narration/text_en.py` les traite :
+
+- **Une année se dit, elle ne se compte pas.** `1789` devient *seventeen
+  eighty-nine*, `1905` devient *nineteen oh five*, `2005` devient *two thousand
+  five*. Ce qui distingue une année d'une quantité est le séparateur de milliers :
+  `1,789 men` se compte, `in 1789` se dit. `--no-text-prep` ou `read_years=False`
+  désactive.
+- **Les suffixes ordinaux** dépendent des deux derniers chiffres : `21st` →
+  *twenty-first*, mais `11th` → *eleventh* et non *eleven-first*.
+- **Le point d'un titre n'est pas une fin de phrase.** `Mr. Dupont` devient
+  *Mister Dupont* — laisser le point inventerait un point final au milieu de la
+  phrase, et le découpage la couperait là.
+- Monnaies avec leurs centimes (*and fifty cents*), pourcentages, heures, chiffres
+  romains après un mot déclencheur (`chapter XIV`).
+
+Le générique suit :
+
+> « Around the Moon », by Jules Verne. Narrated by a synthetic voice.
+>
+> You have been listening to « Around the Moon », by Jules Verne… Recorded in
+> twenty twenty-six. This text is in the public domain.
+
+**Ce qui reste français** : les voix préréglées sont décrites en français et
+sonneront avec un accent. Pour de l'anglais natif, décris une voix anglaise dans
+l'onglet Studio, ou clone une voix anglophone.
 
 ## Partir d'un EPUB
 

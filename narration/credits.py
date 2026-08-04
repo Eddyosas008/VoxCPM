@@ -34,6 +34,7 @@ __all__ = [
     "CLOSING_TITLE",
     "OPENING_TITLE",
     "BookCredits",
+    "titles_for",
     "SYNTHETIC_DISCLOSURE",
 ]
 
@@ -45,6 +46,45 @@ CLOSING_TITLE = "Générique de fin"
 #: Said when no human narrator is named. Not a disclaimer bolted on for safety:
 #: distributors require synthetic narration to be identified as such.
 SYNTHETIC_DISCLOSURE = "une voix de synthèse"
+
+#: Everything the credits say, per language. Kept as data rather than as
+#: branches in the methods, so adding a language is adding an entry.
+_WORDS = {
+    "fr": {
+        "opening_title": OPENING_TITLE,
+        "closing_title": CLOSING_TITLE,
+        "synthetic": SYNTHETIC_DISCLOSURE,
+        "by": "de",
+        "read_by": "Lu par {narrator}",
+        "you_heard": "Vous venez d'écouter {work}",
+        "read_by_inline": ", lu par {narrator}",
+        "produced_by_year": "Enregistrement produit par {publisher}, {year}",
+        "produced_by": "Enregistrement produit par {publisher}",
+        "recorded_in": "Enregistrement réalisé en {year}",
+        "public_domain": "Texte du domaine public",
+        "untitled": "Ce livre",
+        "missing_title": "le titre",
+        "missing_author": "l'auteur",
+        "missing_narrator": "le narrateur (ou la mention de voix de synthèse)",
+    },
+    "en": {
+        "opening_title": "Opening credits",
+        "closing_title": "Closing credits",
+        "synthetic": "a synthetic voice",
+        "by": "by",
+        "read_by": "Narrated by {narrator}",
+        "you_heard": "You have been listening to {work}",
+        "read_by_inline": ", narrated by {narrator}",
+        "produced_by_year": "Produced by {publisher}, {year}",
+        "produced_by": "Produced by {publisher}",
+        "recorded_in": "Recorded in {year}",
+        "public_domain": "This text is in the public domain",
+        "untitled": "This book",
+        "missing_title": "the title",
+        "missing_author": "the author",
+        "missing_narrator": "the narrator (or the synthetic voice disclosure)",
+    },
+}
 
 # A title already carrying its author ("Autour de la Lune, par Jules Verne")
 # would otherwise be announced as "…, par Jules Verne, de Jules Verne".
@@ -80,6 +120,13 @@ class BookCredits:
     public_domain: bool = False
     #: Turning this off is a deliberate act — see the module docstring.
     disclose_synthetic: bool = True
+    #: "fr" or "en". Anything else falls back to French, which is what this
+    #: fork narrates by default.
+    language: str = "fr"
+
+    @property
+    def _words(self) -> dict:
+        return _WORDS.get(self.language, _WORDS["fr"])
 
     @property
     def narrator_credit(self) -> str:
@@ -87,17 +134,21 @@ class BookCredits:
         narrator = _clean(self.narrator)
         if narrator:
             return narrator
-        return SYNTHETIC_DISCLOSURE if self.disclose_synthetic else ""
+        return self._words["synthetic"] if self.disclose_synthetic else ""
 
     def _work(self) -> str:
-        """« Title », de Author — the phrase both credits are built around."""
-        title = _clean(self.title) or "Ce livre"
+        """« Title », by Author — the phrase both credits are built around."""
+        words = self._words
+        title = _clean(self.title) or words["untitled"]
         author = _clean(self.author)
+        # French quotes in both languages: they are heard as a pause rather than
+        # read as characters, and they keep a title made of ordinary words from
+        # dissolving into the sentence around it.
         piece = f"« {title} »"
         if self.subtitle:
             piece += f", {_clean(self.subtitle)}"
         if author and not _names_the_author(title, author):
-            piece += f", de {author}"
+            piece += f", {words['by']} {author}"
         return piece
 
     def opening(self) -> str:
@@ -105,28 +156,31 @@ class BookCredits:
         lines: List[str] = [_sentence(self._work())]
         narrator = self.narrator_credit
         if narrator:
-            lines.append(_sentence(f"Lu par {narrator}"))
+            lines.append(_sentence(self._words["read_by"].format(narrator=narrator)))
         return "\n\n".join(line for line in lines if line)
 
     def closing(self) -> str:
         """The last thing heard: the work named again, then the production."""
+        words = self._words
         narrator = self.narrator_credit
-        first = f"Vous venez d'écouter {self._work()}"
+        first = words["you_heard"].format(work=self._work())
         if narrator:
-            first += f", lu par {narrator}"
+            first += words["read_by_inline"].format(narrator=narrator)
         lines: List[str] = [_sentence(first)]
 
         publisher = _clean(self.publisher)
         year = _clean(self.year)
         if publisher and year:
-            lines.append(_sentence(f"Enregistrement produit par {publisher}, {year}"))
+            lines.append(
+                _sentence(words["produced_by_year"].format(publisher=publisher, year=year))
+            )
         elif publisher:
-            lines.append(_sentence(f"Enregistrement produit par {publisher}"))
+            lines.append(_sentence(words["produced_by"].format(publisher=publisher)))
         elif year:
-            lines.append(_sentence(f"Enregistrement réalisé en {year}"))
+            lines.append(_sentence(words["recorded_in"].format(year=year)))
 
         if self.public_domain:
-            lines.append(_sentence("Texte du domaine public"))
+            lines.append(_sentence(words["public_domain"]))
         return "\n\n".join(line for line in lines if line)
 
     def missing_for_distribution(self) -> List[str]:
@@ -135,14 +189,21 @@ class BookCredits:
         Reported rather than raised: a draft narration is a perfectly reasonable
         thing to produce, and the gaps only matter on the day it is uploaded.
         """
+        words = self._words
         missing: List[str] = []
         if not _clean(self.title):
-            missing.append("le titre")
+            missing.append(words["missing_title"])
         if not _clean(self.author):
-            missing.append("l'auteur")
+            missing.append(words["missing_author"])
         if not self.narrator_credit:
-            missing.append("le narrateur (ou la mention de voix de synthèse)")
+            missing.append(words["missing_narrator"])
         return missing
+
+
+def titles_for(language: str) -> tuple:
+    """The two chapter titles, in the language the credits are spoken in."""
+    words = _WORDS.get(language, _WORDS["fr"])
+    return words["opening_title"], words["closing_title"]
 
 
 def _names_the_author(title: str, author: str) -> bool:

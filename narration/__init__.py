@@ -11,6 +11,7 @@ Stages, in pipeline order::
     epub       read an .epub into the plain chapters everything else expects
     credits    the opening and closing credits distributors require
     text_fr    prepare raw French prose for a TTS engine
+    text_en    the same for English — years, ordinals, titles
     chunking   cut prepared text into engine-sized segments + pause plan
     cache      content-addressed store so an interrupted run resumes per chunk
     quality    flag the segments the engine got wrong, and re-roll those only
@@ -32,5 +33,6 @@ __all__ = [
     "polish",
     "quality",
     "repair",
+    "text_en",
     "text_fr",
 ]
