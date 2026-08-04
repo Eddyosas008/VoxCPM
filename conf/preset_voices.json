@@ -124,5 +124,16 @@
     "diffusion_steps": 10,
     "normalize": true,
     "lang": "fr"
+  },
+  {
+    "name": "Edwin Dérivé (V1)",
+    "description": "",
+    "seed": 1234,
+    "cfg": 2.0,
+    "diffusion_steps": 10,
+    "normalize": true,
+    "lang": "fr",
+    "reference": "assets/voices/edwin_derive_v1.wav",
+    "reference_text": "Bienvenue dans cet espace de méditation conçu spécialement pour vous. Pendant les vingt prochaines minutes, je vous invite à mettre en pause vos responsabilités, vos e-mails et toutes formes de distractions, pour vous offrir un moment précieux de calme et de recentrage."
   }
 ]

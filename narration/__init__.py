@@ -10,6 +10,7 @@ Stages, in pipeline order::
 
     epub       read an .epub into the plain chapters everything else expects
     credits    the opening and closing credits distributors require
+    voices     the catalogue of narration voices, designed or cloned
     text_fr    prepare raw French prose for a TTS engine
     text_en    the same for English — years, ordinals, titles
     chunking   cut prepared text into engine-sized segments + pause plan
@@ -35,4 +36,5 @@ __all__ = [
     "repair",
     "text_en",
     "text_fr",
+    "voices",
 ]

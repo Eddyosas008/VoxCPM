@@ -74,12 +74,20 @@ _CHARS_PER_SECOND = 14.0
 
 
 def resolve_voice(args) -> tuple[str, int | None]:
-    """Return (description, seed) from a preset name or explicit --description/--seed."""
+    """Return (description, seed) from a preset name or explicit --description/--seed.
+
+    A cloned preset also fills in --reference-audio and --reference-text, unless
+    the command line gave its own: what is typed now beats what was configured
+    once.
+    """
     if args.voice:
         preset = app._PRESET_BY_NAME.get(args.voice)
         if preset is None:
             names = ", ".join(repr(v["name"]) for v in app.PRESET_VOICES)
             raise SystemExit(f"Unknown voice {args.voice!r}. Available presets: {names}")
+        if preset.get("reference") and not args.reference_audio:
+            args.reference_audio = preset["reference"]
+            args.reference_text = args.reference_text or preset.get("reference_text", "")
         return preset["description"], preset["seed"]
     return (args.description or ""), args.seed
 
@@ -213,6 +221,7 @@ def main() -> int:
     if args.reference_audio and not Path(args.reference_audio).is_file():
         raise SystemExit(f"Reference audio not found: {args.reference_audio}")
 
+
     in_path = Path(args.input)
     if not in_path.is_file():
         raise SystemExit(f"Input file not found: {in_path}")
@@ -235,6 +244,9 @@ def main() -> int:
         raise SystemExit(f"Input file is empty: {in_path}")
 
     description, seed = resolve_voice(args)
+    # A preset may have just supplied one, so the file is checked again here.
+    if args.reference_audio and not Path(args.reference_audio).is_file():
+        raise SystemExit(f"Reference audio not found: {args.reference_audio}")
     outdir = Path(args.outdir) if args.outdir else app._OUTPUT_DIR / f"book_{app._sanitize_filename(in_path.stem)}"
 
     # ---- prepare -------------------------------------------------------

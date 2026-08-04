@@ -29,6 +29,7 @@ from narration import audio as audio_tools
 from narration import cache as cache_tools
 from narration import epub as epub_reader
 from narration import chunking, credits, delivery, quality, repair, text_en, text_fr
+from narration import voices as voices_catalogue
 
 logging.basicConfig(
     level=logging.INFO,
@@ -456,35 +457,16 @@ _BUILTIN_PRESET_VOICES = [
 
 # Optional external override: conf/preset_voices.json (a JSON list of objects with
 # the same keys). Lets non-developers curate the voice list without editing code.
-_PRESET_VOICES_JSON = Path(__file__).parent / "conf" / "preset_voices.json"
+_REPO_ROOT = Path(__file__).parent
+_PRESET_VOICES_JSON = _REPO_ROOT / "conf" / "preset_voices.json"
 
 
 def _load_preset_voices() -> List[dict]:
-    """Return voices from conf/preset_voices.json if valid, else the built-in list."""
-    if not _PRESET_VOICES_JSON.is_file():
-        return _BUILTIN_PRESET_VOICES
-    try:
-        with open(_PRESET_VOICES_JSON, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        voices = [
-            {
-                "name": str(item["name"]),
-                "description": str(item["description"]),
-                "seed": int(item["seed"]),
-                "cfg": float(item.get("cfg", 2.0)),
-                "diffusion_steps": int(item.get("diffusion_steps", 10)),
-                "normalize": bool(item.get("normalize", True)),
-                "lang": str(item.get("lang", "fr")),
-            }
-            for item in data
-        ]
-        if not voices:
-            raise ValueError("no voices found in JSON")
-        logger.info(f"Loaded {len(voices)} preset voices from {_PRESET_VOICES_JSON}")
-        return voices
-    except Exception as e:
-        logger.warning(f"Could not load {_PRESET_VOICES_JSON} ({e}); using built-in presets.")
-        return _BUILTIN_PRESET_VOICES
+    """The voice catalogue. Reading it lives in narration.voices, which loads
+    without torch or gradio — a voice list is data, not interface."""
+    return voices_catalogue.load_presets(
+        _PRESET_VOICES_JSON, _REPO_ROOT, _BUILTIN_PRESET_VOICES
+    )
 
 
 PRESET_VOICES = _load_preset_voices()
@@ -804,6 +786,20 @@ def create_demo_interface(demo: VoxCPMDemo):
             preset.get("normalize", normalize),
         )
 
+    def _preset_reference(preset_name) -> Tuple[Optional[str], str]:
+        """The recording a preset clones, and its transcript. ("", "") if none.
+
+        Kept apart from _resolve_voice rather than widening its tuple: that
+        function is called from half a dozen places, and a cloned voice only
+        concerns the two that actually synthesize.
+        """
+        preset = (
+            _PRESET_BY_NAME.get(preset_name)
+            if preset_name and preset_name != PRESET_CUSTOM_LABEL
+            else None
+        )
+        return voices_catalogue.reference_of(preset)
+
     def _prepare_seed(use_random_seed: bool, seed_value):
         if use_random_seed:
             return random.randint(0, 2**32 - 1)
@@ -917,6 +913,14 @@ def create_demo_interface(demo: VoxCPMDemo):
         actual_prompt_text = prompt_text_value.strip() if use_prompt_text else ""
         actual_control = "" if use_prompt_text else control_instruction
         seed = _coerce_seed(seed_value)
+
+        # A cloned preset brings its own recording. A file dropped in the form
+        # wins: the user picked it deliberately and just now.
+        preset_reference, preset_reference_text = _preset_reference(preset_name)
+        if preset_reference and not ref_wav:
+            ref_wav = preset_reference
+            actual_control = ""
+            actual_prompt_text = actual_prompt_text or preset_reference_text
         voice_name = preset_name if preset_name and preset_name != PRESET_CUSTOM_LABEL else "custom"
 
         if prepare_text:
@@ -1154,7 +1158,10 @@ def create_demo_interface(demo: VoxCPMDemo):
         description, seed, cfg_value, dit_steps, do_normalize = _resolve_voice(
             preset_name, control_instruction, seed_value, cfg_value, dit_steps, do_normalize
         )
-        if not description.strip():
+        # A cloned voice answers "which voice?" with a recording; it needs no
+        # description, so the demand for one only applies to a designed voice.
+        reference, reference_text = _preset_reference(preset_name)
+        if not reference and not description.strip():
             raise gr.Error(
                 "Choisissez une voix dans la liste ci-dessus, ou décrivez-en une "
                 "dans l'onglet Studio."
@@ -1173,6 +1180,10 @@ def create_demo_interface(demo: VoxCPMDemo):
             steps=int(dit_steps),
             normalize=bool(do_normalize),
             model_id=demo._model_id,
+            # Hashed by content, so a chapter cloned from one recording never
+            # collides in the cache with the same words from another.
+            reference=cache_tools.VoiceSpec.hash_reference(reference),
+            reference_text=reference_text,
         )
         cache = cache_tools.ChunkCache(outdir / ".cache")
 
@@ -1242,10 +1253,13 @@ def create_demo_interface(demo: VoxCPMDemo):
                     def render(current_seed, _segment=segment):
                         sample_rate, wav_out, _ = demo.generate_tts_audio(
                             text_input=_segment.text,
-                            control_instruction=description,
+                            control_instruction="" if reference else description,
+                            reference_wav_path_input=reference,
+                            prompt_text=reference_text,
                             cfg_value_input=cfg_value,
                             do_normalize=do_normalize,
                             inference_timesteps=int(dit_steps),
+                            denoise=False,
                             seed=current_seed,
                         )
                         return sample_rate, wav_out

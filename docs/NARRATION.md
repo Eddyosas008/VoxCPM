@@ -139,6 +139,30 @@ scripts\narrate_book.py livre.epub --reference-audio ma_voix.wav ^
 `--reference-audio` remplace `--voice` et `--description` : un enregistrement est
 une réponse complète à la question « quelle voix ? ».
 
+**Une voix clonée peut devenir une voix préréglée**, listée dans le menu comme les
+autres. Ajoute une entrée à `conf/preset_voices.json` avec un chemin **relatif** au
+dépôt :
+
+```json
+{
+  "name": "Edwin Dérivé (V1)",
+  "reference": "assets/voices/edwin_derive_v1.wav",
+  "reference_text": "le texte exact prononcé dans l'enregistrement",
+  "seed": 1234, "cfg": 2.0, "diffusion_steps": 10, "lang": "fr"
+}
+```
+
+Pas besoin de `description` : l'enregistrement *est* la description. Elle
+s'utilise ensuite partout — menu de l'onglet, et `--voice "Edwin Dérivé (V1)"` en
+ligne de commande, qui va chercher la référence et sa transcription tout seul.
+
+**Les enregistrements ne sont jamais versionnés** (`assets/voices/` est dans le
+`.gitignore`). Ce dépôt est public, et un échantillon de voix est précisément ce
+qui permet à n'importe qui d'usurper celle de son propriétaire. L'entrée qui
+pointe vers le fichier est versionnée ; le fichier, non. Un préréglage dont
+l'enregistrement est absent le signale au démarrage et retombe sur sa
+description, plutôt que d'échouer en pleine génération.
+
 **Ce qu'il faut enregistrer** : un extrait **court et très propre** vaut mieux
 qu'un long avec du souffle. Le débruiteur n'est pas chargé pendant la narration
 (il bloque au téléchargement depuis cette machine), donc **ce qui est dans le
