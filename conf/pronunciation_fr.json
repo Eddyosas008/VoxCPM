@@ -1,13 +1,61 @@
 {
   "_comment": "Lexique de prononciation. Clé = ce qui est écrit dans le texte, valeur = ce qui doit être prononcé. Le remplacement est insensible à la casse et ne s'applique qu'à des mots entiers. Les clés commençant par _ sont ignorées (commentaires). Utile surtout pour les noms propres, les sigles et les mots étrangers d'un livre donné.",
+
   "_exemple_sigles": "--- sigles lus lettre par lettre ---",
   "SNCF": "S N C F",
   "RATP": "R A T P",
   "ONU": "O N U",
   "URSS": "U R S S",
+
   "_exemple_etrangers": "--- mots étrangers ---",
   "Wi-Fi": "wifi",
   "email": "i-mail",
+
   "_exemple_noms": "--- noms propres à adapter à votre livre ---",
-  "Nietzsche": "Nitche"
+  "Nietzsche": "Nitche",
+
+  "_comment_contexte": "Une valeur peut aussi être un objet, pour ne remplacer QUE dans un contexte donné : {\"prononcer\": \"...\", \"après\": \"regex\", \"avant\": \"regex\"}. C'est le seul moyen de traiter un homographe : « il est » et « à l'est » s'écrivent pareil et ne se disent pas pareil, donc une règle qui vise le mot seul casse forcément l'un des deux.",
+
+  "_comment_homographes": "Les entrées ci-dessous sont des MODÈLES, volontairement désactivées (préfixe _ = ignoré). Écoutez d'abord : si la voix lit déjà correctement « l'est » ou « le couvent », n'y touchez pas — une correction inutile ne peut que dégrader. Quand vous en repérez une fausse, recopiez la ligne sans le préfixe et ajustez l'orthographe phonétique à l'oreille.",
+
+  "_est": {
+    "prononcer": "èsste",
+    "après": "à l'|dans l'|vers l'|de l'|l'",
+    "_pourquoi": "le point cardinal, contre le verbe être"
+  },
+  "_fils": {
+    "prononcer": "fisse",
+    "après": "mon|son|ton|le|un|leur",
+    "_pourquoi": "l'enfant, contre les fils électriques"
+  },
+  "_couvent": {
+    "prononcer": "couvan",
+    "après": "le|du|au|ce|un",
+    "_pourquoi": "le monastère, contre le verbe couver (ils couvent)"
+  },
+  "_portions": {
+    "prononcer": "porcions",
+    "après": "les|des|deux|trois|quelques",
+    "_pourquoi": "les parts, contre le verbe porter (nous portions)"
+  },
+  "_violent": {
+    "prononcer": "violan",
+    "après": "un|le|ce|très|si|plus",
+    "_pourquoi": "l'adjectif, contre le verbe violer (ils violent)"
+  },
+  "_content": {
+    "prononcer": "contan",
+    "après": "je suis|il est|elle est|très|si|pas",
+    "_pourquoi": "l'adjectif, contre le verbe conter (ils content)"
+  },
+  "_négligent": {
+    "prononcer": "négligean",
+    "après": "un|le|ce|très|si",
+    "_pourquoi": "l'adjectif, contre le verbe négliger (ils négligent)"
+  },
+  "_plus": {
+    "prononcer": "pluss",
+    "avant": "de|que|d'",
+    "_pourquoi": "le s se prononce dans « plus de dix », pas dans « plus tard »"
+  }
 }

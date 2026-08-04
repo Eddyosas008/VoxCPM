@@ -514,6 +514,32 @@ C'est l'outil pour les noms propres d'un roman, les sigles et les mots étranger
 Le remplacement est insensible à la casse et ne s'applique qu'à des mots entiers.
 Les clés commençant par `_` sont des commentaires.
 
+### Les homographes : quand le même mot se dit de deux façons
+
+`« il est »` et `« à l'est »` s'écrivent pareil et ne se prononcent pas pareil.
+Une entrée de lexique qui vise le mot seul casse forcément l'un des deux, donc
+une valeur peut être un **objet à contexte** :
+
+```json
+"est": { "prononcer": "èsste", "après": "à l'|dans l'|vers l'|l'" },
+"plus": { "prononcer": "pluss", "avant": "de|que|d'" }
+```
+
+`après` et `avant` sont des expressions régulières ; seul ce qui suit le contexte
+est remplacé, le contexte lui-même est conservé. Résultat :
+
+```
+La SNCF est à l'est. Il est tard.
+→ La S N C F est à l'èsste. Il est tard.
+```
+
+`conf/pronunciation_fr.json` contient une **série de modèles désactivés** pour les
+pièges classiques du français — *est, fils, couvent, portions, violent, content,
+négligent, plus*. Ils sont désactivés à dessein : **écoutez d'abord**. Si la voix
+lit déjà correctement « le couvent », corriger ne peut que dégrader. Quand vous en
+repérez un faux, retirez le préfixe `_` de la ligne et ajustez l'orthographe
+phonétique à l'oreille.
+
 ## Ce que la préparation du texte corrige (et ses limites)
 
 Sont gérés : nombres cardinaux et ordinaux (`1er`, `2e`, `1re`), décimales, sommes en

@@ -249,6 +249,46 @@ class TestNormalizeFrench:
         assert "XIV" in normalize_french("chapitre XIV", expand_roman=False)
 
 
+class TestContextualLexicon:
+    """A homograph cannot be fixed by a rule that fires on the word alone."""
+
+    EAST = {"est": {"prononcer": "èsste", "après": "à l'|dans l'|vers l'|l'"}}
+
+    def test_it_fires_in_context(self):
+        assert "èsste" in normalize_french("Le vent vient de l'est.", lexicon=self.EAST)
+
+    def test_it_leaves_the_other_word_alone(self):
+        """`il est` must survive a rule aimed at `à l'est`."""
+        out = normalize_french("Il est tard et elle est partie.", lexicon=self.EAST)
+        assert "èsste" not in out
+        assert "est tard" in out
+
+    def test_the_context_itself_is_kept(self):
+        out = normalize_french("Il regarde vers l'est.", lexicon=self.EAST)
+        assert "vers l'" in out
+
+    def test_a_following_context_works_too(self):
+        lexicon = {"plus": {"prononcer": "pluss", "avant": "de|que"}}
+        out = normalize_french("Il y en a plus de dix, plus tard.", lexicon=lexicon)
+        assert "pluss de dix" in out
+        assert "plus tard" in out
+
+    def test_a_plain_string_entry_still_works(self):
+        assert "S N C F" in normalize_french("La SNCF.", lexicon={"SNCF": "S N C F"})
+
+    def test_case_does_not_matter(self):
+        assert "èsste" in normalize_french("À L'EST, la mer.", lexicon=self.EAST)
+
+    def test_a_malformed_entry_is_ignored_not_fatal(self):
+        lexicon = {"est": {"pas_la_bonne_clef": "x"}, "SNCF": "S N C F"}
+        out = normalize_french("La SNCF est là.", lexicon=lexicon)
+        assert "S N C F" in out and "est là" in out
+
+    def test_a_replacement_containing_a_backslash_is_literal(self):
+        out = normalize_french("Voir SNCF.", lexicon={"SNCF": r"S\N"})
+        assert r"S\N" in out
+
+
 class TestLoadLexicon:
     def test_missing_file_yields_empty(self, tmp_path):
         assert load_lexicon(tmp_path / "nope.json") == {}
