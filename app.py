@@ -1970,6 +1970,19 @@ def create_demo_interface(demo: VoxCPMDemo):
     return interface
 
 
+def parse_auth(value: Optional[str]) -> Optional[Tuple[str, str]]:
+    """``user:password`` into a pair Gradio can check, or None.
+
+    A colon in the password is fine — only the first one separates.
+    """
+    if not value:
+        return None
+    user, separator, password = value.partition(":")
+    if not separator or not user or not password:
+        raise ValueError("--auth expects user:password")
+    return user, password
+
+
 def run_demo(
     server_name: str = "0.0.0.0",
     server_port: int = 8808,
@@ -1977,9 +1990,19 @@ def run_demo(
     model_id: str = "openbmb/VoxCPM2",
     device: str = "auto",
     load_denoiser: bool = True,
+    auth: Optional[Tuple[str, str]] = None,
 ):
     demo = VoxCPMDemo(model_id=model_id, device=device, load_denoiser=load_denoiser)
     interface = create_demo_interface(demo)
+    # Bound to every interface and unauthenticated, this hands a stranger the
+    # machine's whole synthesis capacity — and, on a rented GPU, the bill.
+    if server_name not in ("127.0.0.1", "localhost") and auth is None:
+        logger.warning(
+            "Listening on %s without --auth: anyone who can reach this port can "
+            "use the model. Bind to 127.0.0.1 and reach it through an SSH tunnel, "
+            "or set --auth user:password.",
+            server_name,
+        )
     interface.queue(max_size=10, default_concurrency_limit=1).launch(
         server_name=server_name,
         server_port=server_port,
@@ -1987,6 +2010,7 @@ def run_demo(
         i18n=I18N,
         theme=_APP_THEME,
         css=_CUSTOM_CSS,
+        auth=auth,
     )
 
 
@@ -2021,11 +2045,26 @@ if __name__ == "__main__":
              "clean reference audio for cloning; disabling it speeds up startup and "
              "avoids a slow/blocking download — recommended for narration on CPU.",
     )
+    parser.add_argument(
+        "--auth",
+        type=str,
+        default=os.environ.get("VOXCPM_AUTH", ""),
+        metavar="USER:PASSWORD",
+        help="Require a login. Essential whenever the port is reachable from "
+             "outside the machine — a rented GPU left open is someone else's "
+             "synthesis on your bill. Also read from VOXCPM_AUTH, so the "
+             "password need not appear in the command line or in shell history.",
+    )
     args = parser.parse_args()
+    try:
+        auth = parse_auth(args.auth)
+    except ValueError as error:
+        raise SystemExit(str(error))
     run_demo(
         model_id=args.model_id,
         server_name=args.host,
         server_port=args.port,
         device=args.device,
         load_denoiser=not args.no_denoiser,
+        auth=auth,
     )

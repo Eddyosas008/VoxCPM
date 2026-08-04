@@ -116,6 +116,9 @@ python scripts/assemble_audiobook.py output/book_mon_livre --title "Mon Livre" -
 python scripts/export_acx.py output/book_mon_livre
 ```
 
+**→ Pour narrer ailleurs que sur son poste** — VPS, GPU loué à l'heure, Kaggle,
+et comment atteindre l'interface à distance sans l'exposer : [docs/CLOUD.md](CLOUD.md).
+
 **→ Le guide détaillé est dans [docs/NARRATION.md](NARRATION.md)** : vitesse selon le
 matériel, import EPUB, réglages par usage (fiction, documentaire, méditation,
 podcast), lexique de prononciation personnalisé, et normes de sonie.
