@@ -261,3 +261,37 @@ class TestRemoveDc:
 
     def test_empty(self):
         assert audio.remove_dc(np.zeros(0, dtype=np.float32)).size == 0
+
+
+class TestSpeechSeconds:
+    """How much of a file is voice — the measure a transcript is compared with."""
+
+    def test_counts_only_the_speech(self):
+        signal = np.concatenate([audio.silence(SR, 1.0), sine(3.0), audio.silence(SR, 2.0)])
+        assert audio.speech_seconds(signal, SR) == pytest.approx(3.0, abs=0.15)
+
+    def test_pauses_inside_the_speech_are_excluded_too(self):
+        """What separates this from the span between the first and last word."""
+        signal = np.concatenate(
+            [sine(2.0), audio.silence(SR, 1.5), sine(2.0), audio.silence(SR, 1.5), sine(2.0)]
+        )
+        assert audio.speech_seconds(signal, SR) == pytest.approx(6.0, abs=0.3)
+
+    def test_never_exceeds_the_file(self):
+        signal = sine(2.0)
+        assert audio.speech_seconds(signal, SR) <= 2.0
+
+    def test_silence_measures_nothing(self):
+        assert audio.speech_seconds(audio.silence(SR, 3.0), SR) == 0.0
+
+    def test_empty_input_is_not_a_crash(self):
+        assert audio.speech_seconds(np.zeros(0, dtype=np.float32), SR) == 0.0
+        assert audio.speech_seconds(sine(1.0), 0) == 0.0
+
+    def test_level_does_not_change_the_answer(self):
+        """The threshold is relative, so a quiet take measures like a loud one."""
+        loud = np.concatenate([sine(2.0, amplitude=0.5), audio.silence(SR, 2.0)])
+        quiet = np.concatenate([sine(2.0, amplitude=0.005), audio.silence(SR, 2.0)])
+        assert audio.speech_seconds(quiet, SR) == pytest.approx(
+            audio.speech_seconds(loud, SR), abs=0.1
+        )

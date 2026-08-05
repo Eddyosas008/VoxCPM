@@ -125,3 +125,52 @@ class TestNarratingWithIt:
         out = capsys.readouterr().out
         assert "clonée" in out
         assert reference.name in out
+
+
+class TestCheckingTheReferenceBeforeAnythingRuns:
+    """The recording is measured against its transcript in the pre-flight block.
+
+    It runs during ``--dry-run``, which is the point: the defect it catches
+    otherwise shows up as truncated narration, minutes of CPU from its cause.
+    """
+
+    def dry_run(self, monkeypatch, book, tmp_path, capsys, *extra) -> str:
+        run(monkeypatch, book, tmp_path / "out", "--dry-run", *extra)
+        return capsys.readouterr().out
+
+    def test_a_matching_recording_is_reported_sane(
+        self, monkeypatch, book, tmp_path, reference, capsys
+    ):
+        # 3s of voice for 51 characters — 17 char/s.
+        out = self.dry_run(
+            monkeypatch, book, tmp_path, capsys,
+            "--reference-audio", str(reference),
+            "--reference-text", "a" * 51,
+        )
+        assert "référence saine" in out
+
+    def test_a_transcript_that_stops_short_is_called_out(
+        self, monkeypatch, book, tmp_path, reference, capsys
+    ):
+        out = self.dry_run(
+            monkeypatch, book, tmp_path, capsys,
+            "--reference-audio", str(reference),
+            "--reference-text", "a" * 10,
+        )
+        assert "tronquée" in out
+
+    def test_a_recording_with_no_transcript_is_called_out(
+        self, monkeypatch, book, tmp_path, reference, capsys
+    ):
+        out = self.dry_run(monkeypatch, book, tmp_path, capsys, "--reference-audio", str(reference))
+        assert "sans transcription" in out
+
+    def test_an_unreadable_recording_does_not_stop_the_pre_flight(
+        self, monkeypatch, book, tmp_path, capsys
+    ):
+        """It is the engine's job to fail on it; the summary still prints."""
+        broken = tmp_path / "cassé.wav"
+        broken.write_bytes(b"not a wav at all")
+        out = self.dry_run(monkeypatch, book, tmp_path, capsys, "--reference-audio", str(broken))
+        assert "illisible" in out
+        assert "Chapitres" in out

@@ -92,6 +92,26 @@ def resolve_voice(args) -> tuple[str, int | None]:
     return (args.description or ""), args.seed
 
 
+def describe_reference(path: str, text: str) -> str:
+    """One line on the state of a cloning recording, for the pre-flight summary.
+
+    Printed before the model is even loaded — and so during ``--dry-run`` too,
+    which is where it earns its keep: a recording whose transcript does not
+    cover it truncates every segment of the book, and the symptom appears
+    minutes of CPU away from the cause.
+    """
+    try:
+        wav, sr = sf.read(path, dtype="float32", always_2d=False)
+    except Exception as error:  # noqa: BLE001 - the engine will fail on it too, more obscurely
+        return f"référence illisible ({error})"
+
+    report = quality.inspect_reference(wav, sr, text)
+    if report.ok:
+        return f"référence saine ({report.speech_sec:.1f}s de parole, {report.chars_per_second:.0f} car/s)"
+    marks = {quality.FATAL: "/!\\", quality.SUSPECT: "(!)"}
+    return " ; ".join(f"{marks.get(i.severity, '')} {i.detail}" for i in report.issues)
+
+
 def chapter_title(chapter: str, index: int) -> str:
     """First non-empty line of a chapter, used as its marker title."""
     for line in chapter.splitlines():
@@ -299,6 +319,7 @@ def main() -> int:
     if args.reference_audio:
         print(f"Voix        : clonée de {Path(args.reference_audio).name}"
               + (" (avec transcription)" if args.reference_text else " (sans transcription)"))
+        print(f"              {describe_reference(args.reference_audio, args.reference_text or '')}")
     else:
         print(f"Voix        : {args.voice or '(personnalisée)'} | seed={seed}")
     print(f"Préparation : {'désactivée' if args.no_text_prep else f'française ({len(lexicon)} entrée(s) de lexique)'}")

@@ -364,3 +364,113 @@ def test_render_checked_never_calls_render_more_than_once_when_ok():
         sentence(140), lambda seed: (calls.append(seed), _good(seed))[1], base_seed=None, max_attempts=5
     )
     assert len(calls) == 1
+
+
+# --------------------------------------------------------------------------
+# The recording a cloned voice is built from
+# --------------------------------------------------------------------------
+
+
+def recording(speech_seconds: float, pauses: int = 0, sr: int = SR) -> np.ndarray:
+    """A take: speech broken by pauses, with the silence a real file carries.
+
+    The pauses matter to these tests specifically — the check must measure the
+    speech and not the file, so a take with pauses and a take without must be
+    judged the same when their transcripts are the same.
+    """
+    if pauses <= 0:
+        return with_edges(speech(speech_seconds, sr=sr), sr=sr)
+    piece = speech_seconds / (pauses + 1)
+    parts = []
+    for index in range(pauses + 1):
+        parts.append(speech(piece, sr=sr, seed=index))
+        if index < pauses:
+            parts.append(np.zeros(int(sr * 0.5), dtype=np.float32))
+    return with_edges(np.concatenate(parts), sr=sr)
+
+
+def test_matching_recording_and_transcript_pass():
+    # 5s of speech for 85 characters — 17 char/s, the middle of the range.
+    report = quality.inspect_reference(recording(5.0), SR, sentence(85))
+    assert report.ok, report.describe()
+    assert report.speech_sec == pytest.approx(5.0, abs=0.4)
+    assert report.chars_per_second == pytest.approx(17.0, rel=0.15)
+
+
+def test_recording_saying_more_than_its_transcript_is_fatal():
+    """The defect that cost a whole run: a clip cut past its transcribed sentence.
+
+    The engine then learns that the text runs out before the audio does, and
+    ends every narrated segment early.
+    """
+    report = quality.inspect_reference(recording(7.0), SR, sentence(60))
+    assert report.fatal
+    assert "undertranscribed" in report.codes
+    assert "tronquée" in report.describe()
+
+
+def test_transcript_claiming_words_the_recording_lacks_is_fatal():
+    report = quality.inspect_reference(recording(4.0), SR, sentence(200))
+    assert report.fatal
+    assert "overtranscribed" in report.codes
+
+
+def test_pauses_do_not_count_against_the_transcript():
+    """A speaker who breathes must not measure as an under-transcribed take."""
+    spoken = sentence(85)
+    without = quality.inspect_reference(recording(5.0, pauses=0), SR, spoken)
+    withal = quality.inspect_reference(recording(5.0, pauses=3), SR, spoken)
+    assert without.ok and withal.ok, withal.describe()
+    # Two extra seconds of silence, and the rate barely moves.
+    assert withal.chars_per_second == pytest.approx(without.chars_per_second, rel=0.15)
+
+
+def test_recording_without_a_transcript_is_flagged_but_not_fatal():
+    report = quality.inspect_reference(recording(5.0), SR, "")
+    assert not report.fatal
+    assert report.codes == ("no_transcript",)
+
+
+def test_silent_recording_is_fatal_and_says_so_first():
+    report = quality.inspect_reference(np.zeros(SR * 3, dtype=np.float32), SR, sentence(50))
+    assert report.fatal
+    assert report.codes == ("silent",)
+
+
+def test_empty_recording_is_fatal():
+    report = quality.inspect_reference(np.zeros(0, dtype=np.float32), SR, sentence(50))
+    assert report.fatal
+    assert "silent" in report.codes
+
+
+def test_a_very_short_take_is_worth_mentioning_but_not_fatal():
+    # 2s of speech, transcript matching, so only the length is at issue.
+    report = quality.inspect_reference(recording(2.0), SR, sentence(34))
+    assert not report.fatal
+    assert "too_short" in report.codes
+
+
+def test_a_needlessly_long_take_is_worth_mentioning_but_not_fatal():
+    report = quality.inspect_reference(recording(35.0), SR, sentence(595))
+    assert not report.fatal
+    assert "too_long" in report.codes
+
+
+def test_clipping_in_the_recording_is_reported():
+    wav = recording(5.0)
+    wav[: int(SR * 0.2)] = 1.0
+    report = quality.inspect_reference(wav, SR, sentence(85))
+    assert "clipped" in report.codes
+
+
+def test_reference_thresholds_separate_the_measured_recordings():
+    """The bounds are set from real takes; keep them on the right side of those.
+
+    Measured on the three recordings this check was built from: 10.4 char/s for
+    the under-transcribed one, 15.9 and 19.0 for the two whose transcripts are
+    exact.
+    """
+    bounds = quality.ReferenceThresholds()
+    assert bounds.min_chars_per_second > 10.4
+    assert bounds.min_chars_per_second < 15.9
+    assert bounds.max_chars_per_second > 19.0

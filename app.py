@@ -800,6 +800,27 @@ def create_demo_interface(demo: VoxCPMDemo):
         )
         return voices_catalogue.reference_of(preset)
 
+    def _warn_about_reference(reference: Optional[str], reference_text: str) -> None:
+        """Warn, before generating, when a recording and its transcript disagree.
+
+        Warns rather than refuses. The bounds behind this are heuristics on a
+        thin sample, and from the interface there would be no way past a wrong
+        verdict — a deliberate take that measures oddly would simply become
+        unusable. Being told is the whole value; being stopped is not.
+        """
+        if not reference:
+            return
+        try:
+            wav, sample_rate = sf.read(reference, dtype="float32", always_2d=False)
+        except Exception as error:  # noqa: BLE001 - synthesis will fail on it too
+            logger.warning("Could not inspect reference %s: %s", reference, error)
+            return
+
+        report = quality.inspect_reference(wav, sample_rate, reference_text or "")
+        for issue in report.issues:
+            logger.warning("Reference %s: %s", Path(reference).name, issue)
+            gr.Warning(f"Audio de référence : {issue.detail}")
+
     def _prepare_seed(use_random_seed: bool, seed_value):
         if use_random_seed:
             return random.randint(0, 2**32 - 1)
@@ -921,6 +942,7 @@ def create_demo_interface(demo: VoxCPMDemo):
             ref_wav = preset_reference
             actual_control = ""
             actual_prompt_text = actual_prompt_text or preset_reference_text
+            _warn_about_reference(ref_wav, actual_prompt_text)
         voice_name = preset_name if preset_name and preset_name != PRESET_CUSTOM_LABEL else "custom"
 
         if prepare_text:
@@ -1166,6 +1188,9 @@ def create_demo_interface(demo: VoxCPMDemo):
                 "Choisissez une voix dans la liste ci-dessus, ou décrivez-en une "
                 "dans l'onglet Studio."
             )
+        # Said now rather than never: a mismatched recording truncates every
+        # segment, and a book is hours of CPU before the first one is heard.
+        _warn_about_reference(reference, reference_text)
 
         outdir = _book_dir(title)
         outdir.mkdir(parents=True, exist_ok=True)

@@ -173,6 +173,33 @@ passage au rythme et sur le ton que tu veux entendre, pas une phrase neutre.
 `--reference-text` est facultatif et vaut le coup : le moteur met les mots en
 face de l'audio et clone plus fidèlement.
 
+**La transcription doit couvrir tout l'enregistrement, et rien de plus.** C'est le
+piège le plus coûteux du clonage, parce qu'il est silencieux : l'enregistrement
+sonne parfaitement bien tout seul. Si le fichier contient de la parole que la
+transcription ne mentionne pas — typiquement un clip coupé après la phrase
+transcrite, qui mord sur la suivante — le moteur en déduit que le texte s'épuise
+avant l'audio, et **termine trop tôt chaque segment du livre**. Mesuré ici : une
+même voix, coupée à 8,8 s avec une transcription d'une phrase, sort tronquée ;
+recoupée à 5,8 s là où finit cette phrase, elle sort saine et équivalente à la
+référence complète de 19 s. Une référence courte ne coûte rien ; une référence
+mal alignée coûte tout.
+
+Le pré-vol le vérifie tout seul, avant même de charger le modèle — donc aussi en
+`--dry-run`, et dans les deux onglets :
+
+```
+Voix        : clonée de edwin_derive_v1_phrase.wav (avec transcription)
+              référence saine (4.3s de parole, 16 car/s)
+```
+
+Il compare le temps de **parole réelle** (silences de début, de fin et pauses
+exclues) au nombre de caractères de la transcription, et signale les deux
+décalages : `undertranscribed` (plus de parole que de texte) et `overtranscribed`
+(des mots qui ne sont pas dans l'enregistrement), plus une référence sans
+transcription, trop courte, trop longue ou saturée. **Il avertit, il ne refuse
+pas** : les bornes sont des heuristiques calées sur peu d'enregistrements, et une
+prise volontairement lente ne doit pas devenir inutilisable pour autant.
+
 **Le cache suit la voix.** L'empreinte qui adresse un segment inclut un **hachage
 du contenu** de l'enregistrement, pas son chemin. Deux conséquences voulues :
 réenregistrer dans le même fichier ne ressert pas l'ancienne voix, et déplacer le

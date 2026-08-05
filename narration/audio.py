@@ -48,6 +48,7 @@ __all__ = [
     "silence",
     "speech_bounds",
     "speech_rms_db",
+    "speech_seconds",
     "stitch",
     "trim_silence",
 ]
@@ -346,6 +347,42 @@ def speech_bounds(
     hop = max(1, int(sr * hop_ms / 1000.0))
     frame = max(1, int(sr * frame_ms / 1000.0))
     return int(loud[0]) * hop, min(wav.size, int(loud[-1]) * hop + frame)
+
+
+def speech_seconds(
+    wav: np.ndarray,
+    sr: int,
+    *,
+    relative_db: float = 25.0,
+    frame_ms: float = 20.0,
+) -> float:
+    """Seconds of the signal that actually carry speech.
+
+    Not the file's length, and not the span between its first and last word
+    either: the silence *inside* that span is excluded too. That is what makes
+    the number comparable with a transcript — a pause carries no characters, so
+    counting it would make a speaker who breathes measure as a slower speaker.
+
+    Same relative threshold as :func:`speech_bounds`, for the same reason: a
+    recording arrives at whatever level it was made at.
+    """
+    wav = as_float_mono(wav)
+    if wav.size == 0 or not sr:
+        return 0.0
+
+    hop_ms = frame_ms / 2.0
+    power = _frame_power(wav, sr, frame_ms, hop_ms)
+    if power.size == 0:
+        return 0.0
+
+    level = speech_rms_db(wav, sr)
+    if not np.isfinite(level):
+        return 0.0
+
+    threshold = 10.0 ** ((level - relative_db) / 10.0)
+    loud = int(np.count_nonzero(power > threshold))
+    # Frames overlap, so each one stands for a hop's worth of signal.
+    return min(float(wav.size) / sr, loud * hop_ms / 1000.0)
 
 
 def fade_edges(wav: np.ndarray, sr: int, fade_ms: float = 8.0) -> np.ndarray:
