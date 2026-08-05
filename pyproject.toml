@@ -87,6 +87,12 @@ include = ["voxcpm*"]
 [tool.setuptools_scm]
 version_scheme = "post-release"
 
+[tool.pytest.ini_options]
+# The suite lives in tests/. scripts/test_*.py are standalone self-checks that
+# run their assertions at import time and sys.exit() — collecting them aborts
+# the whole run, so keep pytest out of scripts/.
+testpaths = ["tests"]
+
 [tool.black]
 line-length = 120
 target-version = ['py310']
