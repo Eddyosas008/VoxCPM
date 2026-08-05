@@ -28,7 +28,8 @@ from narration import assemble as assembly
 from narration import audio as audio_tools
 from narration import cache as cache_tools
 from narration import epub as epub_reader
-from narration import chunking, quality, repair, text_fr
+from narration import chunking, credits, delivery, quality, repair, text_en, text_fr
+from narration import voices as voices_catalogue
 
 logging.basicConfig(
     level=logging.INFO,
@@ -215,11 +216,20 @@ _I18N_TRANSLATIONS = {
         "book_text_label": "Book text — separate chapters with a line containing only ---",
         "book_title_label": "Book title",
         "book_author_label": "Author / narrator",
+        "book_language_label": "Language of the book",
+        "book_language_info": "Chooses the text preparation (numbers, abbreviations) and the wording of the credits.",
+        "book_narrator_label": "Narrator named in the credits",
+        "book_narrator_info": "Left empty, the credits state that the reading is a synthetic voice — which is what distributors require.",
+        "book_credits_label": "Opening and closing credits",
+        "book_credits_info": "Distributors (ACX/Audible, Amazon, Apple Books) reject a recording that does not announce its title, author and narrator at both ends.",
         "book_plan_btn": "🔍 Analyse without generating",
         "book_plan_label": "Plan",
         "book_generate_btn": "📖 Narrate the book",
         "book_assemble_btn": "📦 Assemble the audiobook",
+        "book_check_btn": "✅ Check against distribution standards",
         "book_format_label": "Format",
+        "book_bitrate_label": "Bitrate",
+        "book_bitrate_info": "64k AAC is what Audible itself streams; speech gains little above it. Raise it for an archive copy.",
         "book_status_label": "Progress",
         "book_audio_label": "Last finished chapter",
         "book_file_output_label": "Assembled file",
@@ -228,6 +238,8 @@ _I18N_TRANSLATIONS = {
         "book_target_rms_info": "Audiobook platforms expect RMS between -23 and -18 dBFS.",
         "book_pause_sentence_label": "Pause after a sentence (s)",
         "book_pause_paragraph_label": "Pause after a paragraph (s)",
+        "book_polish_label": "Studio chain",
+        "book_polish_info": "High-pass, de-esser, compressor and limiter over each chapter before its level is set — what a listener hears, beyond the levels a distributor checks.",
         "book_repair_title": "🔧 Repair a flagged segment",
         "book_repair_info": "Re-generate a single defective segment and restitch its chapter "
                             "from the cache. The other segments are never re-synthesized.",
@@ -288,11 +300,20 @@ _I18N_TRANSLATIONS = {
         "book_text_label": "Texte du livre — séparez les chapitres par une ligne contenant seulement ---",
         "book_title_label": "Titre du livre",
         "book_author_label": "Auteur / narrateur",
+        "book_language_label": "Langue du livre",
+        "book_language_info": "Détermine la préparation du texte (nombres, abréviations) et la formulation du générique.",
+        "book_narrator_label": "Narrateur cité au générique",
+        "book_narrator_info": "Laissé vide, le générique indique que la lecture est une voix de synthèse — ce que les plateformes exigent.",
+        "book_credits_label": "Générique de début et de fin",
+        "book_credits_info": "Les distributeurs (ACX/Audible, Amazon, Apple Books) refusent un enregistrement qui n'annonce pas son titre, son auteur et son narrateur aux deux bouts.",
         "book_plan_btn": "🔍 Analyser sans générer",
         "book_plan_label": "Plan",
         "book_generate_btn": "📖 Narrer le livre",
         "book_assemble_btn": "📦 Assembler le livre audio",
+        "book_check_btn": "✅ Vérifier la conformité de dépôt",
         "book_format_label": "Format",
+        "book_bitrate_label": "Débit",
+        "book_bitrate_info": "64k AAC est ce qu'Audible diffuse lui-même ; la parole gagne peu au-dessus. À monter pour une copie d'archive.",
         "book_status_label": "Avancement",
         "book_audio_label": "Dernier chapitre terminé",
         "book_file_output_label": "Fichier assemblé",
@@ -301,6 +322,8 @@ _I18N_TRANSLATIONS = {
         "book_target_rms_info": "Les plateformes de livres audio attendent un RMS entre -23 et -18 dBFS.",
         "book_pause_sentence_label": "Pause après une phrase (s)",
         "book_pause_paragraph_label": "Pause après un paragraphe (s)",
+        "book_polish_label": "Chaîne studio",
+        "book_polish_info": "Passe-haut, dé-esseur, compresseur et limiteur sur chaque chapitre avant le calage du niveau — ce que l'auditeur entend, au-delà des niveaux que contrôle un distributeur.",
         "book_repair_title": "🔧 Réparer un segment signalé",
         "book_repair_info": "Régénère un seul segment défectueux et reconstruit son chapitre "
                             "à partir du cache. Les autres segments ne sont jamais recalculés.",
@@ -434,35 +457,16 @@ _BUILTIN_PRESET_VOICES = [
 
 # Optional external override: conf/preset_voices.json (a JSON list of objects with
 # the same keys). Lets non-developers curate the voice list without editing code.
-_PRESET_VOICES_JSON = Path(__file__).parent / "conf" / "preset_voices.json"
+_REPO_ROOT = Path(__file__).parent
+_PRESET_VOICES_JSON = _REPO_ROOT / "conf" / "preset_voices.json"
 
 
 def _load_preset_voices() -> List[dict]:
-    """Return voices from conf/preset_voices.json if valid, else the built-in list."""
-    if not _PRESET_VOICES_JSON.is_file():
-        return _BUILTIN_PRESET_VOICES
-    try:
-        with open(_PRESET_VOICES_JSON, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        voices = [
-            {
-                "name": str(item["name"]),
-                "description": str(item["description"]),
-                "seed": int(item["seed"]),
-                "cfg": float(item.get("cfg", 2.0)),
-                "diffusion_steps": int(item.get("diffusion_steps", 10)),
-                "normalize": bool(item.get("normalize", True)),
-                "lang": str(item.get("lang", "fr")),
-            }
-            for item in data
-        ]
-        if not voices:
-            raise ValueError("no voices found in JSON")
-        logger.info(f"Loaded {len(voices)} preset voices from {_PRESET_VOICES_JSON}")
-        return voices
-    except Exception as e:
-        logger.warning(f"Could not load {_PRESET_VOICES_JSON} ({e}); using built-in presets.")
-        return _BUILTIN_PRESET_VOICES
+    """The voice catalogue. Reading it lives in narration.voices, which loads
+    without torch or gradio — a voice list is data, not interface."""
+    return voices_catalogue.load_presets(
+        _PRESET_VOICES_JSON, _REPO_ROOT, _BUILTIN_PRESET_VOICES
+    )
 
 
 PRESET_VOICES = _load_preset_voices()
@@ -782,6 +786,41 @@ def create_demo_interface(demo: VoxCPMDemo):
             preset.get("normalize", normalize),
         )
 
+    def _preset_reference(preset_name) -> Tuple[Optional[str], str]:
+        """The recording a preset clones, and its transcript. ("", "") if none.
+
+        Kept apart from _resolve_voice rather than widening its tuple: that
+        function is called from half a dozen places, and a cloned voice only
+        concerns the two that actually synthesize.
+        """
+        preset = (
+            _PRESET_BY_NAME.get(preset_name)
+            if preset_name and preset_name != PRESET_CUSTOM_LABEL
+            else None
+        )
+        return voices_catalogue.reference_of(preset)
+
+    def _warn_about_reference(reference: Optional[str], reference_text: str) -> None:
+        """Warn, before generating, when a recording and its transcript disagree.
+
+        Warns rather than refuses. The bounds behind this are heuristics on a
+        thin sample, and from the interface there would be no way past a wrong
+        verdict — a deliberate take that measures oddly would simply become
+        unusable. Being told is the whole value; being stopped is not.
+        """
+        if not reference:
+            return
+        try:
+            wav, sample_rate = sf.read(reference, dtype="float32", always_2d=False)
+        except Exception as error:  # noqa: BLE001 - synthesis will fail on it too
+            logger.warning("Could not inspect reference %s: %s", reference, error)
+            return
+
+        report = quality.inspect_reference(wav, sample_rate, reference_text or "")
+        for issue in report.issues:
+            logger.warning("Reference %s: %s", Path(reference).name, issue)
+            gr.Warning(f"Audio de référence : {issue.detail}")
+
     def _prepare_seed(use_random_seed: bool, seed_value):
         if use_random_seed:
             return random.randint(0, 2**32 - 1)
@@ -850,16 +889,29 @@ def create_demo_interface(demo: VoxCPMDemo):
 
         if book is None:
             return content, gr.update(), gr.update(), gr.update()
-        return (
-            content,
-            book.title or gr.update(),
-            book.author or gr.update(),
-            I18N("book_epub_loaded").format(
-                chapters=len(book.chapters),
-                title=book.title or Path(file_path).stem,
-                author=f" — {book.author}" if book.author else "",
-            ),
+
+        status = I18N("book_epub_loaded").format(
+            chapters=len(book.chapters),
+            title=book.title or Path(file_path).stem,
+            author=f" — {book.author}" if book.author else "",
         )
+        # What was taken out of the book is said out loud, never assumed
+        # unwanted: the reader is the one who decides it was boilerplate.
+        if book.removed:
+            status += "\n\n" + "\n".join(f"- 🗑️ {note}" for note in book.removed)
+
+        # The book directory is derived from the title we are about to fill in,
+        # so the cover can be put where the assembly will look for it. A title
+        # edited afterwards moves that directory; the cover is then simply not
+        # found, which costs a picture and nothing else.
+        try:
+            cover = epub_reader.extract_cover(file_path, _book_dir(book.title))
+            if cover:
+                status += f"\n\n- 🖼️ Couverture importée (`{cover.name}`)"
+        except OSError as error:  # a read-only or full disk, nothing worse
+            logger.warning(f"Could not extract the EPUB cover: {error}")
+
+        return content, book.title or gr.update(), book.author or gr.update(), status
 
     def _generate(
         text: str,
@@ -882,6 +934,15 @@ def create_demo_interface(demo: VoxCPMDemo):
         actual_prompt_text = prompt_text_value.strip() if use_prompt_text else ""
         actual_control = "" if use_prompt_text else control_instruction
         seed = _coerce_seed(seed_value)
+
+        # A cloned preset brings its own recording. A file dropped in the form
+        # wins: the user picked it deliberately and just now.
+        preset_reference, preset_reference_text = _preset_reference(preset_name)
+        if preset_reference and not ref_wav:
+            ref_wav = preset_reference
+            actual_control = ""
+            actual_prompt_text = actual_prompt_text or preset_reference_text
+            _warn_about_reference(ref_wav, actual_prompt_text)
         voice_name = preset_name if preset_name and preset_name != PRESET_CUSTOM_LABEL else "custom"
 
         if prepare_text:
@@ -992,12 +1053,46 @@ def create_demo_interface(demo: VoxCPMDemo):
         """Where a book's chapters and its resume cache live."""
         return _BOOKS_DIR / f"book_{_sanitize_filename(title or 'livre')}"
 
-    def _book_prepared_chapters(book_text: str, prepare: bool) -> List[str]:
+    def _book_credits(title, author, narrator, enabled: bool, language: str = "fr"):
+        """The credits a distributor requires, or None when switched off."""
+        if not enabled:
+            return None
+        return credits.BookCredits(
+            title=(title or "").strip(),
+            author=(author or "").strip(),
+            narrator=(narrator or "").strip(),
+            language=language,
+        )
+
+    def _book_prepared_chapters(
+        book_text: str, prepare: bool, book_credits=None, language: str = "fr"
+    ) -> List[str]:
+        """Chapters as they will be narrated, credits included.
+
+        The credits are chapters like any other on purpose: they then take the
+        same French preparation, voice, seed and mastering as the book.
+        """
         chapters = chunking.split_chapters(book_text)
+        if book_credits is not None and chapters:
+            chapters = [book_credits.opening()] + chapters + [book_credits.closing()]
         if not prepare:
             return chapters
         lexicon = text_fr.load_lexicon(_LEXICON_PATH)
-        return [text_fr.normalize_french(chapter, lexicon=lexicon) for chapter in chapters]
+        normalize = (
+            text_en.normalize_english if language == "en" else text_fr.normalize_french
+        )
+        return [normalize(chapter, lexicon=lexicon) for chapter in chapters]
+
+    def _book_chapter_title(
+        chapter: str, index: int, count: int, has_credits: bool, language: str = "fr"
+    ) -> str:
+        """Marker title — the credits are named rather than quoted."""
+        opening_title, closing_title = credits.titles_for(language)
+        if has_credits and index == 1:
+            return opening_title
+        if has_credits and index == count:
+            return closing_title
+        return _chapter_title(chapter, index)
 
     def _book_profile(pause_sentence: float, pause_paragraph: float) -> chunking.PauseProfile:
         default = chunking.PauseProfile()
@@ -1007,9 +1102,21 @@ def create_demo_interface(demo: VoxCPMDemo):
             paragraph=float(pause_paragraph),
         )
 
-    def _book_plan(book_text, chunk_max_chars_value, prepare, pause_sentence, pause_paragraph):
+    def _book_plan(
+        book_text,
+        chunk_max_chars_value,
+        prepare,
+        pause_sentence,
+        pause_paragraph,
+        title="",
+        author="",
+        narrator="",
+        with_credits=True,
+        language="fr",
+    ):
         """Show what would be generated, without loading the model."""
-        chapters = _book_prepared_chapters(book_text, prepare)
+        book_credits = _book_credits(title, author, narrator, with_credits, language)
+        chapters = _book_prepared_chapters(book_text, prepare, book_credits, language)
         if not chapters:
             return "*Aucun texte à analyser.*"
 
@@ -1054,6 +1161,10 @@ def create_demo_interface(demo: VoxCPMDemo):
         pause_paragraph,
         preset_name,
         qc_retries,
+        narrator="",
+        with_credits=True,
+        polish_on=True,
+        language="fr",
         progress=gr.Progress(),
     ):
         """Narrate every chapter, writing each one to disk as soon as it is done.
@@ -1061,23 +1172,32 @@ def create_demo_interface(demo: VoxCPMDemo):
         Yields after each chapter so the UI shows progress on a job that runs for
         hours, and so a finished chapter is listenable before the book is.
         """
-        chapters = _book_prepared_chapters(book_text, prepare)
+        book_credits = _book_credits(title, author, narrator, with_credits, language)
+        chapters = _book_prepared_chapters(book_text, prepare, book_credits, language)
         if not chapters:
             raise gr.Error("Aucun texte à narrer. Chargez un fichier .txt ou collez le texte.")
 
         description, seed, cfg_value, dit_steps, do_normalize = _resolve_voice(
             preset_name, control_instruction, seed_value, cfg_value, dit_steps, do_normalize
         )
-        if not description.strip():
+        # A cloned voice answers "which voice?" with a recording; it needs no
+        # description, so the demand for one only applies to a designed voice.
+        reference, reference_text = _preset_reference(preset_name)
+        if not reference and not description.strip():
             raise gr.Error(
                 "Choisissez une voix dans la liste ci-dessus, ou décrivez-en une "
                 "dans l'onglet Studio."
             )
+        # Said now rather than never: a mismatched recording truncates every
+        # segment, and a book is hours of CPU before the first one is heard.
+        _warn_about_reference(reference, reference_text)
 
         outdir = _book_dir(title)
         outdir.mkdir(parents=True, exist_ok=True)
         profile = _book_profile(pause_sentence, pause_paragraph)
-        mastering = audio_tools.MasteringSettings(target_rms_db=float(target_rms))
+        mastering = audio_tools.MasteringSettings(
+            target_rms_db=float(target_rms), polish=bool(polish_on)
+        )
         voice_spec = cache_tools.VoiceSpec(
             description=description,
             seed=seed,
@@ -1085,6 +1205,10 @@ def create_demo_interface(demo: VoxCPMDemo):
             steps=int(dit_steps),
             normalize=bool(do_normalize),
             model_id=demo._model_id,
+            # Hashed by content, so a chapter cloned from one recording never
+            # collides in the cache with the same words from another.
+            reference=cache_tools.VoiceSpec.hash_reference(reference),
+            reference_text=reference_text,
         )
         cache = cache_tools.ChunkCache(outdir / ".cache")
 
@@ -1095,7 +1219,9 @@ def create_demo_interface(demo: VoxCPMDemo):
         chapter_plans = [
             repair.PlannedChapter(
                 index=index,
-                title=_chapter_title(chapter, index),
+                title=_book_chapter_title(
+                    chapter, index, len(chapters), book_credits is not None, language
+                ),
                 segments=tuple(
                     repair.PlannedSegment(segment.text, segment.pause_after)
                     for segment in chunking.split_into_segments(
@@ -1152,10 +1278,13 @@ def create_demo_interface(demo: VoxCPMDemo):
                     def render(current_seed, _segment=segment):
                         sample_rate, wav_out, _ = demo.generate_tts_audio(
                             text_input=_segment.text,
-                            control_instruction=description,
+                            control_instruction="" if reference else description,
+                            reference_wav_path_input=reference,
+                            prompt_text=reference_text,
                             cfg_value_input=cfg_value,
                             do_normalize=do_normalize,
                             inference_timesteps=int(dit_steps),
+                            denoise=False,
                             seed=current_seed,
                         )
                         return sample_rate, wav_out
@@ -1300,7 +1429,7 @@ def create_demo_interface(demo: VoxCPMDemo):
         )
         return "\n".join(lines), str(rebuilt.path)
 
-    def _book_assemble(title, author, output_format):
+    def _book_assemble(title, author, output_format, bitrate=""):
         """Join the generated chapters into one chaptered file."""
         outdir = _book_dir(title)
         chapter_files = sorted(outdir.glob("chapitre_*.wav"))
@@ -1308,11 +1437,15 @@ def create_demo_interface(demo: VoxCPMDemo):
             raise gr.Error(f"Aucun chapitre trouvé dans {outdir}. Lancez d'abord la narration.")
 
         target = outdir / f"{outdir.name}_complet.{output_format}"
+        # Written by the EPUB import, if the book carried one.
+        covers = sorted(outdir.glob("couverture.*"))
         result = assembly.assemble(
             chapter_files,
             target,
             title=title or outdir.name,
             author=author or "",
+            bitrate=bitrate or None,
+            cover_path=covers[0] if covers else None,
         )
         message = [
             f"### Assemblage\n",
@@ -1330,6 +1463,68 @@ def create_demo_interface(demo: VoxCPMDemo):
             )
         delivered = result.output_path or result.wav_path
         return "\n".join(message), str(delivered)
+
+    def _book_check_delivery(title):
+        """Check the finished chapters against what a distributor accepts.
+
+        Reading only — no encoding, because ffmpeg may not be installed and
+        because the answer worth having before spending an evening on an
+        upload is *whether* the files pass, not the MP3s themselves.
+        """
+        outdir = _book_dir(title)
+        chapter_files = sorted(outdir.glob("chapitre_*.wav"))
+        if not chapter_files:
+            raise gr.Error(f"Aucun chapitre trouvé dans {outdir}. Lancez d'abord la narration.")
+
+        titles = []
+        titles_path = outdir / "titles.txt"
+        if titles_path.is_file():
+            # utf-8-sig: a titles.txt edited on Windows carries a byte order mark.
+            titles = [
+                line.strip()
+                for line in titles_path.read_text(encoding="utf-8-sig").splitlines()
+                if line.strip()
+            ]
+
+        profile = delivery.ACX_PROFILE
+        limit = delivery.max_seconds_for(profile)
+        rows, failing, total_sec = [], 0, 0.0
+        for index, path in enumerate(chapter_files, 1):
+            data, sample_rate = sf.read(str(path), dtype="float32")
+            parts = delivery.split_for_delivery(data, sample_rate, profile)
+            name = titles[index - 1] if index <= len(titles) else path.stem
+            for part_number, part in enumerate(parts, 1):
+                report = delivery.check_delivered(part, sample_rate, profile)
+                total_sec += report["duration_sec"]
+                suffix = f" (partie {part_number})" if len(parts) > 1 else ""
+                reasons = delivery.failures(report)
+                if reasons:
+                    failing += 1
+                rows.append(
+                    f"| {name[:40]}{suffix} | {report['duration_sec'] / 60:.1f} | "
+                    f"{report['rms_db']:.1f} | {report['head_room_sec']:.2f} | "
+                    f"{report['tail_room_sec']:.2f} | "
+                    f"{'✅' if not reasons else '❌ ' + ' ; '.join(reasons)} |"
+                )
+
+        header = [
+            f"### Conformité {profile.name} — {len(rows)} fichier(s), "
+            f"{total_sec / 60:.0f} min\n",
+            f"MP3 {profile.bitrate_kbps} kbps CBR · {profile.sample_rate} Hz · "
+            f"mono · ≤ {limit / 60:.0f} min par fichier\n",
+            "| Fichier | min | RMS dBFS | tête s | queue s | Verdict |",
+            "|---|---|---|---|---|---|",
+        ]
+        footer = (
+            f"\n**{failing} fichier(s) hors norme.**"
+            if failing
+            else "\n**Tous les fichiers satisfont la norme.**"
+        )
+        footer += (
+            "\n\nPour produire le dossier à déposer (MP3 encodés + extrait commercial) :\n\n"
+            f"```\npython scripts/export_acx.py {outdir}\n```"
+        )
+        return "\n".join(header + rows) + footer
 
     def _on_toggle_instant(checked):
         """Instant UI toggle — no ASR, no blocking."""
@@ -1512,6 +1707,24 @@ def create_demo_interface(demo: VoxCPMDemo):
                         with gr.Row():
                             book_title = gr.Textbox(value="", label=I18N("book_title_label"))
                             book_author = gr.Textbox(value="", label=I18N("book_author_label"))
+                        with gr.Row():
+                            book_language = gr.Dropdown(
+                                choices=[("Français", "fr"), ("English", "en")],
+                                value="fr",
+                                label=I18N("book_language_label"),
+                                info=I18N("book_language_info"),
+                            )
+                            book_narrator = gr.Textbox(
+                                value="",
+                                label=I18N("book_narrator_label"),
+                                info=I18N("book_narrator_info"),
+                            )
+                            book_with_credits = gr.Checkbox(
+                                value=True,
+                                label=I18N("book_credits_label"),
+                                elem_classes=["switch-toggle"],
+                                info=I18N("book_credits_info"),
+                            )
 
                         # The book's own voice picker. Deliberately not a mirror
                         # of the Studio one: this dropdown is what the book is
@@ -1557,6 +1770,12 @@ def create_demo_interface(demo: VoxCPMDemo):
                                 step=0.05,
                                 label=I18N("book_pause_sentence_label"),
                             )
+                            book_polish = gr.Checkbox(
+                                value=True,
+                                label=I18N("book_polish_label"),
+                                elem_classes=["switch-toggle"],
+                                info=I18N("book_polish_info"),
+                            )
                             book_pause_paragraph = gr.Slider(
                                 minimum=0.0,
                                 maximum=3.0,
@@ -1587,7 +1806,15 @@ def create_demo_interface(demo: VoxCPMDemo):
                                 label=I18N("book_format_label"),
                                 scale=1,
                             )
+                            book_bitrate = gr.Dropdown(
+                                choices=["64k", "96k", "128k", "192k", "256k"],
+                                value="64k",
+                                label=I18N("book_bitrate_label"),
+                                info=I18N("book_bitrate_info"),
+                                scale=1,
+                            )
                             book_assemble_btn = gr.Button(I18N("book_assemble_btn"), scale=2)
+                            book_check_btn = gr.Button(I18N("book_check_btn"), scale=2)
 
                         with gr.Accordion(I18N("book_repair_title"), open=False):
                             gr.Markdown(I18N("book_repair_info"))
@@ -1698,7 +1925,18 @@ def create_demo_interface(demo: VoxCPMDemo):
 
         book_plan_btn.click(
             fn=_book_plan,
-            inputs=[book_text, chunk_max_chars, book_prepare, book_pause_sentence, book_pause_paragraph],
+            inputs=[
+                book_text,
+                chunk_max_chars,
+                book_prepare,
+                book_pause_sentence,
+                book_pause_paragraph,
+                book_title,
+                book_author,
+                book_narrator,
+                book_with_credits,
+                book_language,
+            ],
             outputs=[book_status],
             show_progress=False,
         )
@@ -1728,6 +1966,10 @@ def create_demo_interface(demo: VoxCPMDemo):
                 book_pause_paragraph,
                 book_preset_voice,
                 book_qc_retries,
+                book_narrator,
+                book_with_credits,
+                book_polish,
+                book_language,
             ],
             outputs=[book_status, book_audio],
             show_progress=True,
@@ -1769,15 +2011,36 @@ def create_demo_interface(demo: VoxCPMDemo):
             api_name="repair_book_segment",
         )
 
+        book_check_btn.click(
+            fn=_book_check_delivery,
+            inputs=[book_title],
+            outputs=[book_status],
+            show_progress=True,
+            api_name="check_delivery",
+        )
+
         book_assemble_btn.click(
             fn=_book_assemble,
-            inputs=[book_title, book_author, book_format],
+            inputs=[book_title, book_author, book_format, book_bitrate],
             outputs=[book_status, book_output_file],
             show_progress=True,
             api_name="assemble_book",
         )
 
     return interface
+
+
+def parse_auth(value: Optional[str]) -> Optional[Tuple[str, str]]:
+    """``user:password`` into a pair Gradio can check, or None.
+
+    A colon in the password is fine — only the first one separates.
+    """
+    if not value:
+        return None
+    user, separator, password = value.partition(":")
+    if not separator or not user or not password:
+        raise ValueError("--auth expects user:password")
+    return user, password
 
 
 def run_demo(
@@ -1787,9 +2050,19 @@ def run_demo(
     model_id: str = "openbmb/VoxCPM2",
     device: str = "auto",
     load_denoiser: bool = True,
+    auth: Optional[Tuple[str, str]] = None,
 ):
     demo = VoxCPMDemo(model_id=model_id, device=device, load_denoiser=load_denoiser)
     interface = create_demo_interface(demo)
+    # Bound to every interface and unauthenticated, this hands a stranger the
+    # machine's whole synthesis capacity — and, on a rented GPU, the bill.
+    if server_name not in ("127.0.0.1", "localhost") and auth is None:
+        logger.warning(
+            "Listening on %s without --auth: anyone who can reach this port can "
+            "use the model. Bind to 127.0.0.1 and reach it through an SSH tunnel, "
+            "or set --auth user:password.",
+            server_name,
+        )
     interface.queue(max_size=10, default_concurrency_limit=1).launch(
         server_name=server_name,
         server_port=server_port,
@@ -1797,6 +2070,7 @@ def run_demo(
         i18n=I18N,
         theme=_APP_THEME,
         css=_CUSTOM_CSS,
+        auth=auth,
     )
 
 
@@ -1831,11 +2105,26 @@ if __name__ == "__main__":
              "clean reference audio for cloning; disabling it speeds up startup and "
              "avoids a slow/blocking download — recommended for narration on CPU.",
     )
+    parser.add_argument(
+        "--auth",
+        type=str,
+        default=os.environ.get("VOXCPM_AUTH", ""),
+        metavar="USER:PASSWORD",
+        help="Require a login. Essential whenever the port is reachable from "
+             "outside the machine — a rented GPU left open is someone else's "
+             "synthesis on your bill. Also read from VOXCPM_AUTH, so the "
+             "password need not appear in the command line or in shell history.",
+    )
     args = parser.parse_args()
+    try:
+        auth = parse_auth(args.auth)
+    except ValueError as error:
+        raise SystemExit(str(error))
     run_demo(
         model_id=args.model_id,
         server_name=args.host,
         server_port=args.port,
         device=args.device,
         load_denoiser=not args.no_denoiser,
+        auth=auth,
     )

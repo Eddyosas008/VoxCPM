@@ -26,6 +26,13 @@ What is detected, and why each one is worth a check:
 ``looped``      the level envelope repeats, as it does when a phrase is spoken
                 twice.
 
+The same pairing catches a defect one step earlier, before anything has been
+generated at all. A *cloned* voice is a recording plus the words spoken in it,
+and :func:`inspect_reference` measures the one against the other. A recording
+that says more than its transcript admits teaches the engine that the text runs
+out before the audio does, and it then ends every narrated segment early — the
+whole book truncated, from a mismatch visible in a millisecond.
+
 Deliberately torch-free, like the rest of the package: the checks run on a
 finished waveform, so they are unit-testable against synthetic signals without
 loading a model.
@@ -45,10 +52,13 @@ __all__ = [
     "SUSPECT",
     "Issue",
     "QualityThresholds",
+    "ReferenceReport",
+    "ReferenceThresholds",
     "RenderResult",
     "SegmentReport",
     "ends_abruptly",
     "envelope_repetition",
+    "inspect_reference",
     "inspect_segment",
     "longest_internal_silence_sec",
     "render_checked",
@@ -79,6 +89,14 @@ class QualityThresholds:
 
     The range held exactly when the voice set grew from seven to fourteen, which
     is the reason to trust it: doubling the sample moved neither end.
+
+    **English was measured too, and needs no bounds of its own.** The same four
+    voices reading a sentence of the same length come back at 14.7 to 17.7
+    characters per second against 17.4 to 20.9 in French — around a tenth
+    slower, and the nearest limit is still more than twice away. Adding a
+    language knob here would be configuration for a difference that does not
+    exist, so there is none; if a language ever does fall outside, these numbers
+    are what to compare its measurement against.
     """
 
     #: Median measured across the preset voices. Explains a report, and breaks
@@ -395,6 +413,157 @@ def inspect_segment(
         issues=tuple(issues),
         expected_chars_per_second=thresholds.expected_chars_per_second,
     )
+
+
+# --------------------------------------------------------------------------
+# The recording a cloned voice is built from
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ReferenceThresholds:
+    """Where a cloning recording stops being usable.
+
+    The rate bounds are deliberately not :class:`QualityThresholds`': those
+    judge *generated* speech against the fourteen preset voices, while this
+    judges a human take, measured over the speech alone rather than the whole
+    file. Measured on the three recordings available here — one voice, one
+    session — the under-transcribed one comes back at 10.4 characters per second
+    of speech against 15.9 and 19.0 for the two whose transcripts are exact.
+    The lower bound sits between them, nearer the bad case, because the cost is
+    asymmetric: this only ever prints a warning, so missing a mild mismatch is
+    cheaper than crying wolf at a deliberate speaker.
+
+    Three recordings of one speaker is a thin basis, and the honest reading of
+    these numbers is "far enough outside plausible narration to be worth a
+    look", not "measured to two significant figures". Widen them rather than
+    argue with them if a real take is ever flagged.
+    """
+
+    #: Below this, there is more speech in the recording than the transcript accounts for.
+    min_chars_per_second: float = 12.0
+    #: Above this, the transcript claims words the recording does not contain.
+    max_chars_per_second: float = 30.0
+    #: Typical rate, used only to phrase the report in seconds.
+    expected_chars_per_second: float = 17.0
+    #: Below this there is too little voice to clone from.
+    min_speech_sec: float = 3.0
+    #: Past this the recording is only costing tokens; it clones no better.
+    max_speech_sec: float = 30.0
+    silence_peak_db: float = -50.0
+    clipping_sample_ratio: float = 0.0005
+    clipping_threshold: float = 0.999
+
+
+@dataclass(frozen=True)
+class ReferenceReport:
+    """What a cloning recording measures, and what is wrong with it."""
+
+    duration_sec: float
+    speech_sec: float
+    characters: int
+    chars_per_second: float
+    peak_db: float
+    issues: Tuple[Issue, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.issues
+
+    @property
+    def fatal(self) -> bool:
+        return any(issue.severity == FATAL for issue in self.issues)
+
+    @property
+    def severity(self) -> Optional[str]:
+        if not self.issues:
+            return None
+        return max((issue.severity for issue in self.issues), key=lambda s: _SEVERITY_RANK.get(s, 0))
+
+    @property
+    def codes(self) -> Tuple[str, ...]:
+        return tuple(issue.code for issue in self.issues)
+
+    def describe(self) -> str:
+        if self.ok:
+            return f"ok ({self.speech_sec:.1f}s de parole, {self.chars_per_second:.0f} car/s)"
+        return ", ".join(f"{i.code} — {i.detail}" for i in self.issues)
+
+
+def inspect_reference(
+    wav: np.ndarray,
+    sr: int,
+    text: str,
+    thresholds: ReferenceThresholds = ReferenceThresholds(),
+) -> ReferenceReport:
+    """Measure a cloning recording against the transcript that goes with it.
+
+    Runs before a single segment is generated, which is the entire point: a
+    mismatch here is silent — the recording sounds perfectly fine on its own —
+    and only shows up as truncated narration minutes of CPU later, where the
+    cause is nowhere near the symptom.
+
+    The comparison is against *speech* seconds, not the file's length, so
+    trailing silence and a speaker's pauses do not read as a mismatch. Nothing
+    is refused: these bounds are heuristics on a thin sample, and the caller is
+    better placed than they are to decide that an unusual take is deliberate.
+    """
+    wav = audio_tools.as_float_mono(wav)
+    duration = float(wav.size) / sr if sr > 0 else 0.0
+    speech = audio_tools.speech_seconds(wav, sr) if wav.size and sr > 0 else 0.0
+    characters = len((text or "").strip())
+    rate = characters / speech if speech > 0 else 0.0
+    peak = audio_tools.peak_db(wav)
+
+    issues: List[Issue] = []
+
+    if wav.size == 0 or speech <= 0.0 or peak < thresholds.silence_peak_db:
+        issues.append(Issue("silent", FATAL, f"aucune parole dans l'enregistrement ({duration:.1f}s)"))
+        return ReferenceReport(duration, speech, characters, rate, float(peak), tuple(issues))
+
+    if not characters:
+        # Supported by the engine, and markedly worse: without the words, the
+        # timbre is copied but the prosody is guessed.
+        issues.append(
+            Issue("no_transcript", SUSPECT, "enregistrement sans transcription, le clonage sera moins fidèle")
+        )
+    elif rate < thresholds.min_chars_per_second:
+        accounted = characters / thresholds.expected_chars_per_second
+        issues.append(
+            Issue(
+                "undertranscribed",
+                FATAL,
+                f"{speech:.1f}s de parole pour {characters} caractères "
+                f"(~{accounted:.1f}s attendues) — la transcription ne couvre pas tout "
+                f"l'enregistrement, la narration sera tronquée",
+            )
+        )
+    elif rate > thresholds.max_chars_per_second:
+        accounted = characters / thresholds.expected_chars_per_second
+        issues.append(
+            Issue(
+                "overtranscribed",
+                FATAL,
+                f"{characters} caractères pour {speech:.1f}s de parole "
+                f"(~{accounted:.1f}s attendues) — la transcription contient des mots "
+                f"qui ne sont pas dans l'enregistrement",
+            )
+        )
+
+    if speech < thresholds.min_speech_sec:
+        issues.append(
+            Issue("too_short", SUSPECT, f"{speech:.1f}s de parole, peu pour caractériser une voix")
+        )
+    elif speech > thresholds.max_speech_sec:
+        issues.append(
+            Issue("too_long", SUSPECT, f"{speech:.1f}s de parole, sans bénéfice pour le clonage")
+        )
+
+    clipped = _clipped_ratio(wav, thresholds.clipping_threshold)
+    if clipped > thresholds.clipping_sample_ratio:
+        issues.append(Issue("clipped", SUSPECT, f"{clipped * 100:.2f}% des échantillons saturés"))
+
+    return ReferenceReport(duration, speech, characters, rate, float(peak), tuple(issues))
 
 
 # --------------------------------------------------------------------------

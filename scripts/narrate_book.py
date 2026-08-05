@@ -47,8 +47,10 @@ Examples
   ./.venv/Scripts/python.exe scripts/narrate_book.py livre.txt --voice "..." --device cuda
 """
 import argparse
+import dataclasses
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -64,7 +66,7 @@ import app  # noqa: E402
 from narration import assemble as assembly  # noqa: E402
 from narration import audio as audio_tools  # noqa: E402
 from narration import cache as cache_tools  # noqa: E402
-from narration import chunking, epub, quality, text_fr  # noqa: E402
+from narration import chunking, credits, epub, quality, repair, text_en, text_fr  # noqa: E402
 
 #: Rough characters-per-second of finished narration, used only to estimate how
 #: long a book will run before committing hours of CPU to it.
@@ -72,14 +74,42 @@ _CHARS_PER_SECOND = 14.0
 
 
 def resolve_voice(args) -> tuple[str, int | None]:
-    """Return (description, seed) from a preset name or explicit --description/--seed."""
+    """Return (description, seed) from a preset name or explicit --description/--seed.
+
+    A cloned preset also fills in --reference-audio and --reference-text, unless
+    the command line gave its own: what is typed now beats what was configured
+    once.
+    """
     if args.voice:
         preset = app._PRESET_BY_NAME.get(args.voice)
         if preset is None:
             names = ", ".join(repr(v["name"]) for v in app.PRESET_VOICES)
             raise SystemExit(f"Unknown voice {args.voice!r}. Available presets: {names}")
+        if preset.get("reference") and not args.reference_audio:
+            args.reference_audio = preset["reference"]
+            args.reference_text = args.reference_text or preset.get("reference_text", "")
         return preset["description"], preset["seed"]
     return (args.description or ""), args.seed
+
+
+def describe_reference(path: str, text: str) -> str:
+    """One line on the state of a cloning recording, for the pre-flight summary.
+
+    Printed before the model is even loaded — and so during ``--dry-run`` too,
+    which is where it earns its keep: a recording whose transcript does not
+    cover it truncates every segment of the book, and the symptom appears
+    minutes of CPU away from the cause.
+    """
+    try:
+        wav, sr = sf.read(path, dtype="float32", always_2d=False)
+    except Exception as error:  # noqa: BLE001 - the engine will fail on it too, more obscurely
+        return f"référence illisible ({error})"
+
+    report = quality.inspect_reference(wav, sr, text)
+    if report.ok:
+        return f"référence saine ({report.speech_sec:.1f}s de parole, {report.chars_per_second:.0f} car/s)"
+    marks = {quality.FATAL: "/!\\", quality.SUSPECT: "(!)"}
+    return " ; ".join(f"{marks.get(i.severity, '')} {i.detail}" for i in report.issues)
 
 
 def chapter_title(chapter: str, index: int) -> str:
@@ -103,8 +133,19 @@ def build_parser() -> argparse.ArgumentParser:
     voice.add_argument("--seed", type=int, help="Seed for the custom voice (fixes the voice identity)")
     voice.add_argument("--cfg", type=float, default=2.0, help="CFG guidance scale (default: 2.0)")
     voice.add_argument("--steps", type=int, default=10, help="Diffusion steps (default: 10)")
+    voice.add_argument("--reference-audio", metavar="WAV",
+                       help="Clone a voice from this recording instead of describing one. "
+                            "A short, clean take beats a long noisy one — the denoiser is "
+                            "off during narration, so what is in the file is what is copied")
+    voice.add_argument("--reference-text",
+                       help="Exact transcript of --reference-audio. Optional, and worth "
+                            "giving: the engine matches the words to the audio and clones "
+                            "more faithfully with it")
 
     text = parser.add_argument_group("texte")
+    text.add_argument("--language", choices=["fr", "en"], default="fr",
+                      help="Language of the book: picks the text preparation and the "
+                           "wording of the credits (default: fr)")
     text.add_argument("--no-text-prep", action="store_true",
                       help="Skip French normalization (numbers, abbreviations, Roman numerals)")
     text.add_argument("--lexicon", default="conf/pronunciation_fr.json",
@@ -117,6 +158,9 @@ def build_parser() -> argparse.ArgumentParser:
     text.add_argument("--no-epub-split", action="store_true",
                       help="EPUB: keep one chapter per file instead of cutting files that "
                            "hold several chapters at their headings")
+    text.add_argument("--keep-boilerplate", action="store_true",
+                      help="EPUB: keep the Project Gutenberg header and licence, and any "
+                           "contents page, instead of removing them")
     text.add_argument("--chunk-max-chars", type=int, default=chunking.DEFAULT_MAX_CHARS,
                       help=f"Max characters per segment (default: {chunking.DEFAULT_MAX_CHARS})")
 
@@ -134,6 +178,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Loudness target in dBFS (ACX window is -23..-18, default: -20)")
     pauses.add_argument("--no-master", action="store_true",
                         help="Skip trimming, de-clicking and loudness normalization")
+    pauses.add_argument("--no-polish", action="store_true",
+                        help="Skip the studio chain (high-pass, de-esser, compressor, limiter) "
+                             "applied to each chapter before its level is set")
 
     run = parser.add_argument_group("exécution")
     run.add_argument("--outdir", help="Output directory (default: output/book_<filename>)")
@@ -144,8 +191,29 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--dry-run", action="store_true", help="Show the plan, generate nothing")
     run.add_argument("--assemble", nargs="?", const="m4b", choices=["m4b", "m4a", "mp3", "wav"],
                      help="Assemble the chapters into one chaptered file when done")
-    run.add_argument("--title", default="", help="Book title used for the assembled file")
-    run.add_argument("--author", default="", help="Author / narrator used for the assembled file")
+    run.add_argument("--cover", help="Cover image for the assembled file "
+                                     "(default: the EPUB's own, when there is one)")
+    run.add_argument("--no-cover", action="store_true",
+                     help="Do not embed a cover in the assembled file")
+    run.add_argument("--assemble-bitrate",
+                     help="Bitrate of the assembled file, e.g. 96, 128k "
+                          "(default: 64k AAC, 128k MP3)")
+    run.add_argument("--export-acx", action="store_true",
+                     help="Prepare the folder a distributor accepts (one file per chapter, "
+                          "192 kbps CBR MP3, retail sample) once the narration is done")
+    run.add_argument("--title", default="", help="Book title (assembled file, and credits)")
+    run.add_argument("--author", default="", help="Author (assembled file, and credits)")
+
+    story = parser.add_argument_group("generique")
+    story.add_argument("--narrator", default="",
+                       help="Human narrator named in the credits. Left empty, the credits "
+                            "disclose a synthetic voice, as distributors require")
+    story.add_argument("--publisher", default="", help="Production credited at the end")
+    story.add_argument("--year", default="", help="Year credited at the end")
+    story.add_argument("--public-domain", action="store_true",
+                       help="State in the closing credits that the text is public domain")
+    story.add_argument("--no-credits", action="store_true",
+                       help="Do not add the opening and closing credits distributors require")
     run.add_argument("--continuity", action="store_true",
                      help="EXPERIMENTAL: chain each segment from the previous one (prompt-cache "
                           "continuation) for smoother joins, instead of same-seed only. Slower; "
@@ -165,8 +233,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
 
-    if not args.voice and not args.description:
-        raise SystemExit("Provide either --voice <preset name> or --description <text> [--seed N].")
+    if not args.voice and not args.description and not args.reference_audio:
+        raise SystemExit(
+            "Provide either --voice <preset name>, --description <text> [--seed N], "
+            "or --reference-audio <wav> to clone a voice."
+        )
+    if args.reference_audio and not Path(args.reference_audio).is_file():
+        raise SystemExit(f"Reference audio not found: {args.reference_audio}")
+
 
     in_path = Path(args.input)
     if not in_path.is_file():
@@ -177,27 +251,53 @@ def main() -> int:
                 in_path,
                 min_chars=args.epub_min_chars,
                 split_on_headings=not args.no_epub_split,
+                strip_boilerplate=not args.keep_boilerplate,
             )
         except epub.EpubError as error:
             raise SystemExit(str(error))
         print(epub.summarize(book))
         print()
     else:
+        book = None
         raw_text = in_path.read_text(encoding="utf-8").strip()
     if not raw_text:
         raise SystemExit(f"Input file is empty: {in_path}")
 
     description, seed = resolve_voice(args)
+    # A preset may have just supplied one, so the file is checked again here.
+    if args.reference_audio and not Path(args.reference_audio).is_file():
+        raise SystemExit(f"Reference audio not found: {args.reference_audio}")
     outdir = Path(args.outdir) if args.outdir else app._OUTPUT_DIR / f"book_{app._sanitize_filename(in_path.stem)}"
 
     # ---- prepare -------------------------------------------------------
     raw_chapters = chunking.split_chapters(raw_text, args.chapter_regex)
     titles = [chapter_title(chapter, i) for i, chapter in enumerate(raw_chapters, 1)]
 
+    # Credits are chapters like any other, deliberately: they then go through
+    # the same French preparation, the same voice and seed, the same mastering
+    # and the same cache as the book, so they sound like the narrator rather
+    # than an announcement bolted on afterwards.
+    book_credits = credits.BookCredits(
+        title=args.title or (book.title if book else "") or in_path.stem,
+        author=args.author or (book.author if book else ""),
+        narrator=args.narrator,
+        publisher=args.publisher,
+        year=args.year,
+        public_domain=args.public_domain,
+        language=args.language,
+    )
+    if not args.no_credits:
+        opening_title, closing_title = credits.titles_for(args.language)
+        raw_chapters = [book_credits.opening()] + raw_chapters + [book_credits.closing()]
+        titles = [opening_title] + titles + [closing_title]
+
     lexicon = {}
     if not args.no_text_prep:
         lexicon = text_fr.load_lexicon(args.lexicon)
-        chapters = [text_fr.normalize_french(chapter, lexicon=lexicon) for chapter in raw_chapters]
+        prepare = (
+            text_en.normalize_english if args.language == "en" else text_fr.normalize_french
+        )
+        chapters = [prepare(chapter, lexicon=lexicon) for chapter in raw_chapters]
     else:
         chapters = raw_chapters
 
@@ -216,10 +316,21 @@ def main() -> int:
     total_chars = sum(chunking.total_characters(segments) for _, segments in plan)
 
     print(f"Entrée      : {in_path}")
-    print(f"Voix        : {args.voice or '(personnalisée)'} | seed={seed}")
+    if args.reference_audio:
+        print(f"Voix        : clonée de {Path(args.reference_audio).name}"
+              + (" (avec transcription)" if args.reference_text else " (sans transcription)"))
+        print(f"              {describe_reference(args.reference_audio, args.reference_text or '')}")
+    else:
+        print(f"Voix        : {args.voice or '(personnalisée)'} | seed={seed}")
     print(f"Préparation : {'désactivée' if args.no_text_prep else f'française ({len(lexicon)} entrée(s) de lexique)'}")
     print(f"Chapitres   : {len(chapters)} | segments : {total_segments} | caractères : {total_chars}")
     print(f"Durée estimée : ~{total_chars / _CHARS_PER_SECOND / 60:.0f} min de narration")
+    if args.no_credits:
+        print("Générique   : aucun (les distributeurs en exigent un au début et à la fin)")
+    else:
+        missing = book_credits.missing_for_distribution()
+        print("Générique   : début et fin ajoutés"
+              + (f" — manque encore {', '.join(missing)}" if missing else ""))
     print(f"Sortie      : {outdir}")
     for index, segments in plan:
         print(f"  chapitre {index:03d}: {len(segments)} segment(s)  « {titles[index - 1][:50]} »")
@@ -242,9 +353,36 @@ def main() -> int:
         steps=args.steps,
         normalize=not args.no_normalize,
         model_id=args.model_id,
+        # Hashed by content: the cache must not serve a segment spoken by a
+        # different recording that happened to live at the same path.
+        reference=cache_tools.VoiceSpec.hash_reference(args.reference_audio),
+        reference_text=(args.reference_text or "").strip(),
     )
     cache = cache_tools.ChunkCache(outdir / ".cache", enabled=not args.no_cache)
-    mastering = audio_tools.MasteringSettings(target_rms_db=args.target_rms)
+    mastering = audio_tools.MasteringSettings(
+        target_rms_db=args.target_rms, polish=not args.no_polish
+    )
+
+    # The plan is what makes a later repair possible: without it, which cache
+    # entry holds which sentence is lost the moment this run ends. Written
+    # before any audio, so a narration interrupted after nine hours is still
+    # repairable — which is exactly the narration worth repairing rather than
+    # running again.
+    repair.BookPlan(
+        voice=dataclasses.asdict(voice_spec),
+        mastering=dataclasses.asdict(mastering),
+        chapters=tuple(
+            repair.PlannedChapter(
+                index=index,
+                title=titles[index - 1],
+                segments=tuple(
+                    repair.PlannedSegment(segment.text, segment.pause_after)
+                    for segment in segments
+                ),
+            )
+            for index, segments in plan
+        ),
+    ).save(outdir)
 
     qc = not args.no_qc
     thresholds = quality.QualityThresholds()
@@ -293,9 +431,12 @@ def main() -> int:
                         sr, wav_out, _ = demo.generate_tts_audio(
                             text_input=_segment.text,
                             control_instruction=description,
+                            reference_wav_path_input=args.reference_audio,
+                            prompt_text=(args.reference_text or ""),
                             cfg_value_input=args.cfg,
                             do_normalize=not args.no_normalize,
                             inference_timesteps=args.steps,
+                            denoise=False,
                             seed=current_seed,
                         )
                     return sr, wav_out
@@ -398,6 +539,16 @@ def main() -> int:
         if not chapter_files:
             print("Rien à assembler.")
             return 1 if (args.qc_strict and defective) else 0
+        # The book carries its own cover; only an explicit --cover beats it.
+        cover_path = Path(args.cover) if args.cover else None
+        if cover_path is None and not args.no_cover and epub.is_epub(in_path):
+            cover_path = epub.extract_cover(in_path, outdir)
+            if cover_path:
+                print(f"Couverture  : {cover_path.name} (tirée de l'EPUB)")
+        if cover_path and not cover_path.is_file():
+            print(f"Couverture introuvable, ignorée : {cover_path}")
+            cover_path = None
+
         target = outdir / f"{outdir.name}_complet.{args.assemble}"
         print(f"\nAssemblage de {len(chapter_files)} chapitre(s) -> {target.name}")
         result = assembly.assemble(
@@ -406,17 +557,29 @@ def main() -> int:
             title=args.title or in_path.stem,
             author=args.author,
             titles=titles,
+            bitrate=args.assemble_bitrate,
+            cover_path=cover_path,
         )
         print(f"Durée totale : {result.duration_sec / 60:.1f} min")
         print(result.message)
         if result.pending_command:
-            import subprocess
-
             print("À exécuter une fois ffmpeg installé :")
             print("  " + subprocess.list2cmdline(result.pending_command))
     else:
         print("Astuce : ajoutez --assemble m4b pour produire un fichier unique avec chapitres, "
               "ou lancez scripts/assemble_audiobook.py plus tard.")
+
+    # ---- deliver -------------------------------------------------------
+    if args.export_acx:
+        # Run as a subprocess rather than imported: the exporter is a script in
+        # its own right, and a book that narrated for nine hours must not lose
+        # its chapters to an exception raised while preparing the delivery.
+        print()
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).with_name("export_acx.py")), str(outdir)]
+        )
+        if result.returncode:
+            print("Export : des fichiers sont hors norme, voir ci-dessus.")
 
     if args.qc_strict and defective:
         print(f"--qc-strict : {defective} segment(s) toujours défectueux.")

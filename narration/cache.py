@@ -48,6 +48,35 @@ class VoiceSpec:
     steps: int = 10
     normalize: bool = True
     model_id: str = ""
+    #: Identifies the reference recording a cloned voice was built from — a
+    #: hash of its *contents*, not its path, because the same path can hold a
+    #: different take tomorrow and the same take can be moved. Empty for a voice
+    #: described in words. It belongs here for the same reason the seed does:
+    #: without it, a chapter narrated in a cloned voice would collide in the
+    #: cache with the same sentence narrated from a description.
+    reference: str = ""
+    #: The transcript given alongside that recording, which also changes the
+    #: result.
+    reference_text: str = ""
+
+    @staticmethod
+    def hash_reference(path) -> str:
+        """Content hash of a reference recording, or "" when there is none.
+
+        Hashing the bytes rather than the name is what makes the cache honest:
+        re-recording into the same filename must not silently reuse the old
+        voice, and moving the file must not throw the cache away.
+        """
+        if not path:
+            return ""
+        file_path = Path(path)
+        if not file_path.is_file():
+            return ""
+        digest = hashlib.sha256()
+        with file_path.open("rb") as handle:
+            for block in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(block)
+        return digest.hexdigest()[:16]
 
     def fingerprint(self) -> str:
         payload = {"version": CACHE_VERSION, **asdict(self)}

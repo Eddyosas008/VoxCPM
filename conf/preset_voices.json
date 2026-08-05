@@ -124,5 +124,16 @@
     "diffusion_steps": 10,
     "normalize": true,
     "lang": "fr"
+  },
+  {
+    "name": "Edwin Dérivé (V1)",
+    "description": "",
+    "seed": 1234,
+    "cfg": 2.0,
+    "diffusion_steps": 10,
+    "normalize": true,
+    "lang": "fr",
+    "reference": "assets/voices/edwin_derive_v1_phrase.wav",
+    "reference_text": "Bienvenue dans cet espace de méditation conçu spécialement pour vous."
   }
 ]

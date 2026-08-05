@@ -412,6 +412,108 @@ class TestFrontMatter:
         assert len(epub.read_epub(path, min_chars=1).chapters) == 2
 
 
+class TestBoilerplate:
+    """The apparatus around a book: Gutenberg wrappers, contents pages."""
+
+    HEADER = (
+        "<p>The Project Gutenberg eBook of Le Livre</p>"
+        "<p>This eBook is for the use of anyone anywhere at no cost.</p>"
+        "<p>*** START OF THE PROJECT GUTENBERG EBOOK LE LIVRE ***</p>"
+    )
+    FOOTER = (
+        "<p>*** END OF THE PROJECT GUTENBERG EBOOK LE LIVRE ***</p>"
+        "<p>THE FULL PROJECT GUTENBERG LICENSE — Section 1. General Terms of Use.</p>"
+    )
+
+    def test_the_english_notice_before_the_book_is_removed(self, tmp_path):
+        body = f"{self.HEADER}<h2>I Le départ</h2><p>{LONG}</p>"
+        path = build_epub(tmp_path / "gh.epub", [("ch1.xhtml", document(body))])
+        book = epub.read_epub(path)
+        assert "Project Gutenberg" not in book.chapters[0].text
+        assert LONG.strip()[:40] in book.chapters[0].text
+
+    def test_the_licence_after_the_book_is_removed(self, tmp_path):
+        body = f"<h2>I Le départ</h2><p>{LONG}</p>{self.FOOTER}"
+        path = build_epub(tmp_path / "gf.epub", [("ch1.xhtml", document(body))])
+        book = epub.read_epub(path)
+        assert "FULL PROJECT GUTENBERG LICENSE" not in book.chapters[-1].text
+        assert LONG.strip()[:40] in book.chapters[-1].text
+
+    def test_a_whole_licence_chapter_is_dropped(self, tmp_path):
+        documents = [
+            ("ch1.xhtml", document(f"<h2>I Le départ</h2><p>{LONG}</p>{self.FOOTER}")),
+            ("ch2.xhtml", document(f"<h2>Licence</h2><p>{LONG}</p>")),
+        ]
+        path = build_epub(tmp_path / "gc.epub", documents)
+        book = epub.read_epub(path)
+        assert [c.title for c in book.chapters] == ["I Le départ"]
+
+    def test_the_opening_chapter_is_retitled_from_what_is_left(self, tmp_path):
+        """Its title came from a heading inside the notice that was removed."""
+        body = (
+            "<h2>The Project Gutenberg eBook of Le Livre</h2>"
+            "<p>*** START OF THE PROJECT GUTENBERG EBOOK LE LIVRE ***</p>"
+            f"<p>LE LIVRE</p><p>par une autrice</p><p>{LONG}</p>"
+        )
+        path = build_epub(tmp_path / "gt.epub", [("ch1.xhtml", document(body))])
+        book = epub.read_epub(path)
+        assert book.chapters[0].title == "LE LIVRE"
+
+    def test_nothing_is_removed_silently(self, tmp_path):
+        body = f"{self.HEADER}<h2>I Le départ</h2><p>{LONG}</p>{self.FOOTER}"
+        path = build_epub(tmp_path / "gr.epub", [("ch1.xhtml", document(body))])
+        book = epub.read_epub(path)
+        assert len(book.removed) == 2
+        assert any("en-tête" in note for note in book.removed)
+        assert any("licence" in note for note in book.removed)
+
+    def test_stripping_can_be_turned_off(self, tmp_path):
+        body = f"{self.HEADER}<h2>I Le départ</h2><p>{LONG}</p>{self.FOOTER}"
+        path = build_epub(tmp_path / "gk.epub", [("ch1.xhtml", document(body))])
+        book = epub.read_epub(path, strip_boilerplate=False)
+        assert "Project Gutenberg" in book.chapters[0].text
+        assert book.removed == []
+
+    def test_a_book_without_the_markers_is_untouched(self, simple_book):
+        book = epub.read_epub(simple_book)
+        assert book.removed == []
+        assert len(book.chapters) == 2
+
+    def test_a_contents_page_is_dropped(self, tmp_path):
+        contents = (
+            "<h2>Table des matières</h2>"
+            "<p>I Le départ</p><p>II. La traversée</p><p>III Le retour</p>"
+            "<p>IV L'arrivée</p><p>V La fin</p>"
+        )
+        documents = [
+            ("toc.xhtml", document(contents)),
+            ("c1.xhtml", document(f"<h2>I Le départ</h2><p>{LONG}</p>")),
+            ("c2.xhtml", document(f"<h2>II La traversée</h2><p>{LONG}</p>")),
+            ("c3.xhtml", document(f"<h2>III Le retour</h2><p>{LONG}</p>")),
+            ("c4.xhtml", document(f"<h2>IV L'arrivée</h2><p>{LONG}</p>")),
+            ("c5.xhtml", document(f"<h2>V La fin</h2><p>{LONG}</p>")),
+        ]
+        path = build_epub(tmp_path / "toc.epub", documents, prefix="OEBPS/")
+        book = epub.read_epub(path, min_chars=1)
+        assert "Table des matières" not in [c.title for c in book.chapters]
+        assert any("table des matières" in note for note in book.removed)
+
+    def test_punctuation_does_not_hide_a_contents_page(self, tmp_path):
+        """`CHAPITRE II.` in the list, `CHAPITRE II` in the heading."""
+        assert epub._toc_key("CHAPITRE II.") == epub._toc_key("Chapitre II")
+
+    def test_ordinary_prose_is_never_taken_for_a_contents_page(self, tmp_path):
+        """The rule must not be able to eat a chapter of the actual book."""
+        documents = [
+            ("c1.xhtml", document(f"<h2>I Le départ</h2><p>{LONG}</p>")),
+            ("c2.xhtml", document(f"<h2>II La traversée</h2><p>{LONG}</p>")),
+        ]
+        path = build_epub(tmp_path / "prose.epub", documents)
+        book = epub.read_epub(path)
+        assert len(book.chapters) == 2
+        assert book.removed == []
+
+
 class TestFailures:
     def test_missing_file(self, tmp_path):
         with pytest.raises(epub.EpubError, match="No such file"):
@@ -501,6 +603,82 @@ class TestToBookText:
 
         text = epub.to_book_text(epub.read_epub(path))
         assert len(chunking.split_chapters(text)) == 1
+
+
+class TestCover:
+    """A cover is found by any of the three routes real books use."""
+
+    COVER = b"\x89PNG\r\n\x1a\n" + b"pixels"
+
+    def with_cover(self, tmp_path, name, manifest_extra, meta="", image="cover.png",
+                   media_type="image/png"):
+        """An EPUB whose cover is declared the way ``manifest_extra`` says."""
+        path = build_epub(
+            tmp_path / name,
+            [("ch1.xhtml", document(f"<p>{LONG}</p>"))],
+        )
+        with zipfile.ZipFile(path) as archive:
+            entries = {entry: archive.read(entry) for entry in archive.namelist()}
+        opf = entries["OEBPS/content.opf"].decode()
+        opf = opf.replace("</manifest>", manifest_extra + "</manifest>")
+        opf = opf.replace("</metadata>", meta + "</metadata>")
+        entries["OEBPS/content.opf"] = opf.encode()
+        entries[f"OEBPS/{image}"] = self.COVER
+        with zipfile.ZipFile(path, "w") as archive:
+            for entry, data in entries.items():
+                archive.writestr(entry, data)
+        return path
+
+    def test_epub3_marks_it_with_a_property(self, tmp_path):
+        path = self.with_cover(
+            tmp_path, "c3.epub",
+            '<item id="cov" href="cover.png" media-type="image/png" properties="cover-image"/>',
+        )
+        out = epub.extract_cover(path, tmp_path / "out")
+        assert out is not None and out.read_bytes() == self.COVER
+        assert out.suffix == ".png"
+
+    def test_epub2_points_at_it_from_the_metadata(self, tmp_path):
+        path = self.with_cover(
+            tmp_path, "c2.epub",
+            '<item id="cov" href="cover.png" media-type="image/png"/>',
+            meta='<meta name="cover" content="cov"/>',
+        )
+        assert epub.extract_cover(path, tmp_path / "out2") is not None
+
+    def test_a_book_that_declares_nothing_is_found_by_name(self, tmp_path):
+        path = self.with_cover(
+            tmp_path, "c1.epub",
+            '<item id="img" href="cover.png" media-type="image/png"/>',
+        )
+        assert epub.extract_cover(path, tmp_path / "out3") is not None
+
+    def test_the_extension_follows_the_declared_type(self, tmp_path):
+        path = self.with_cover(
+            tmp_path, "cj.epub",
+            '<item id="cov" href="cover.bin" media-type="image/jpeg" properties="cover-image"/>',
+            image="cover.bin",
+        )
+        out = epub.extract_cover(path, tmp_path / "out4")
+        assert out is not None and out.suffix == ".jpg"
+
+    def test_a_book_without_a_cover_is_not_an_error(self, simple_book, tmp_path):
+        assert epub.extract_cover(simple_book, tmp_path / "out5") is None
+
+    def test_an_unreadable_file_is_not_an_error_either(self, tmp_path):
+        broken = tmp_path / "broken.epub"
+        broken.write_text("pas une archive", encoding="utf-8")
+        assert epub.extract_cover(broken, tmp_path / "out6") is None
+        assert epub.extract_cover(tmp_path / "absent.epub", tmp_path / "out7") is None
+
+    def test_an_explicit_path_is_honoured(self, tmp_path):
+        path = self.with_cover(
+            tmp_path, "cp.epub",
+            '<item id="cov" href="cover.png" media-type="image/png" properties="cover-image"/>',
+        )
+        target = tmp_path / "ailleurs" / "image.png"
+        assert epub.extract_cover(path, target) == target
+        assert target.read_bytes() == self.COVER
 
 
 class TestHelpers:

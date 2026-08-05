@@ -24,11 +24,14 @@ chacune dans un module de `narration/` — testable et utilisable indépendammen
 | Étape | Module | Ce qu'elle fait |
 |---|---|---|
 | **0. Lecture** | `narration/epub.py` | Lit un `.epub` dans l'ordre du *spine* et en tire des chapitres titrés — un `.txt` se découpe lui sur les lignes `---` |
-| **1. Préparation** | `narration/text_fr.py` | Réécrit le texte tel qu'un narrateur le dirait : `1789` → « mille sept cent quatre-vingt-neuf », `M. Dupont` → « Monsieur Dupont », `XIVe siècle` → « quatorzième siècle », `14h30`, `1 250 €`, `3,5 %`… |
+| **0 bis. Générique** | `narration/credits.py` | Ajoute au livre le générique de début et de fin qu'exigent les distributeurs, comme deux chapitres à part entière |
+| **1. Préparation** | `narration/text_fr.py` ou `text_en.py` | Réécrit le texte tel qu'un narrateur le dirait : `1789` → « mille sept cent quatre-vingt-neuf », `M. Dupont` → « Monsieur Dupont », `XIVe siècle` → « quatorzième siècle », `14h30`, `1 250 €`, `3,5 %`… |
 | **2. Découpage** | `narration/chunking.py` | Coupe en segments sous la limite du moteur, **sans jamais couper une phrase**, et décide la durée du silence après chaque segment selon la ponctuation |
 | **3. Synthèse** | moteur VoxCPM2 | Même seed partout → voix identique du début à la fin |
 | **4. Mastering** | `narration/audio.py` | Rogne les silences parasites, supprime les clics aux jointures, insère les pauses, normalise la sonie **une fois par chapitre** |
+| **4 bis. Chaîne studio** | `narration/polish.py` | Passe-haut à 80 Hz, dé-esseur, compresseur et limiteur avant le calage du niveau — et mesure de la sonie en **LUFS** (EBU R128), la norme des plateformes de streaming |
 | **5. Assemblage** | `narration/assemble.py` | Réunit les chapitres en un seul M4B/MP3 avec marqueurs de chapitres |
+| **6. Livraison** | `narration/delivery.py` | Découpe, échantillonne et encode les fichiers qu'un distributeur accepte (MP3 192 kbps CBR, 44,1 kHz) |
 
 Entre les étapes 2 et 3, un **cache par segment** (`narration/cache.py`) rend la
 narration reprenable : voir plus bas.
@@ -80,7 +83,9 @@ lancer l'app (ou export sous bash).
    abréviation mal interprétés — avant d'engager des heures de calcul.
 4. Clique **« 📖 Narrer le livre »**. Chaque chapitre terminé est écrit sur disque
    et devient écoutable immédiatement ; l'avancement s'affiche au fur et à mesure.
-5. Clique **« 📦 Assembler le livre audio »** pour obtenir un fichier unique.
+5. Clique **« 📦 Assembler le livre audio »** pour obtenir un fichier unique,
+   et **« ✅ Vérifier la conformité de dépôt »** pour savoir, chapitre par
+   chapitre, ce qu'un distributeur accepterait ou renverrait.
 
 ### 2. Script `narrate_book.py` — pour un livre entier en ligne de commande
 
@@ -120,6 +125,123 @@ Deux options utiles dans les **Réglages avancés** :
 - **Préparation du texte français** — applique l'étape 1 de la chaîne.
 - **Mastering livre audio** — applique l'étape 4 (activé par défaut).
 
+## Narrer dans une voix clonée
+
+Le moteur sait cloner une voix depuis un enregistrement, mais seul l'onglet
+Studio y avait accès — donc pour un extrait, jamais pour un livre. C'est branché
+dans la narration longue :
+
+```
+scripts\narrate_book.py livre.epub --reference-audio ma_voix.wav ^
+    --reference-text "le texte exact prononcé dans l'enregistrement"
+```
+
+`--reference-audio` remplace `--voice` et `--description` : un enregistrement est
+une réponse complète à la question « quelle voix ? ».
+
+**Une voix clonée peut devenir une voix préréglée**, listée dans le menu comme les
+autres. Ajoute une entrée à `conf/preset_voices.json` avec un chemin **relatif** au
+dépôt :
+
+```json
+{
+  "name": "Edwin Dérivé (V1)",
+  "reference": "assets/voices/edwin_derive_v1.wav",
+  "reference_text": "le texte exact prononcé dans l'enregistrement",
+  "seed": 1234, "cfg": 2.0, "diffusion_steps": 10, "lang": "fr"
+}
+```
+
+Pas besoin de `description` : l'enregistrement *est* la description. Elle
+s'utilise ensuite partout — menu de l'onglet, et `--voice "Edwin Dérivé (V1)"` en
+ligne de commande, qui va chercher la référence et sa transcription tout seul.
+
+**Les enregistrements ne sont jamais versionnés** (`assets/voices/` est dans le
+`.gitignore`). Ce dépôt est public, et un échantillon de voix est précisément ce
+qui permet à n'importe qui d'usurper celle de son propriétaire. L'entrée qui
+pointe vers le fichier est versionnée ; le fichier, non. Un préréglage dont
+l'enregistrement est absent le signale au démarrage et retombe sur sa
+description, plutôt que d'échouer en pleine génération.
+
+**Ce qu'il faut enregistrer** : un extrait **court et très propre** vaut mieux
+qu'un long avec du souffle. Le débruiteur n'est pas chargé pendant la narration
+(il bloque au téléchargement depuis cette machine), donc **ce qui est dans le
+fichier est ce qui sera copié** — respiration, écho de la pièce, ventilateur
+compris. Et c'est cette voix qui portera le livre pendant des heures : lis un
+passage au rythme et sur le ton que tu veux entendre, pas une phrase neutre.
+
+`--reference-text` est facultatif et vaut le coup : le moteur met les mots en
+face de l'audio et clone plus fidèlement.
+
+**La transcription doit couvrir tout l'enregistrement, et rien de plus.** C'est le
+piège le plus coûteux du clonage, parce qu'il est silencieux : l'enregistrement
+sonne parfaitement bien tout seul. Si le fichier contient de la parole que la
+transcription ne mentionne pas — typiquement un clip coupé après la phrase
+transcrite, qui mord sur la suivante — le moteur en déduit que le texte s'épuise
+avant l'audio, et **termine trop tôt chaque segment du livre**. Mesuré ici : une
+même voix, coupée à 8,8 s avec une transcription d'une phrase, sort tronquée ;
+recoupée à 5,8 s là où finit cette phrase, elle sort saine et équivalente à la
+référence complète de 19 s. Une référence courte ne coûte rien ; une référence
+mal alignée coûte tout.
+
+Le pré-vol le vérifie tout seul, avant même de charger le modèle — donc aussi en
+`--dry-run`, et dans les deux onglets :
+
+```
+Voix        : clonée de edwin_derive_v1_phrase.wav (avec transcription)
+              référence saine (4.3s de parole, 16 car/s)
+```
+
+Il compare le temps de **parole réelle** (silences de début, de fin et pauses
+exclues) au nombre de caractères de la transcription, et signale les deux
+décalages : `undertranscribed` (plus de parole que de texte) et `overtranscribed`
+(des mots qui ne sont pas dans l'enregistrement), plus une référence sans
+transcription, trop courte, trop longue ou saturée. **Il avertit, il ne refuse
+pas** : les bornes sont des heuristiques calées sur peu d'enregistrements, et une
+prise volontairement lente ne doit pas devenir inutilisable pour autant.
+
+**Le cache suit la voix.** L'empreinte qui adresse un segment inclut un **hachage
+du contenu** de l'enregistrement, pas son chemin. Deux conséquences voulues :
+réenregistrer dans le même fichier ne ressert pas l'ancienne voix, et déplacer le
+fichier ne jette pas le cache. Un même passage cloné et décrit ne peuvent pas se
+confondre en cache.
+
+## Narrer en anglais
+
+`--language en` (ou le menu **Langue du livre** dans l'onglet) bascule deux choses :
+la préparation du texte et la formulation du générique.
+
+```
+.\.venv\Scripts\python.exe scripts\narrate_book.py book.epub --language en ^
+    --voice "..." --title "Around the Moon" --author "Jules Verne"
+```
+
+L'anglais a ses propres irrégularités, et `narration/text_en.py` les traite :
+
+- **Une année se dit, elle ne se compte pas.** `1789` devient *seventeen
+  eighty-nine*, `1905` devient *nineteen oh five*, `2005` devient *two thousand
+  five*. Ce qui distingue une année d'une quantité est le séparateur de milliers :
+  `1,789 men` se compte, `in 1789` se dit. `--no-text-prep` ou `read_years=False`
+  désactive.
+- **Les suffixes ordinaux** dépendent des deux derniers chiffres : `21st` →
+  *twenty-first*, mais `11th` → *eleventh* et non *eleven-first*.
+- **Le point d'un titre n'est pas une fin de phrase.** `Mr. Dupont` devient
+  *Mister Dupont* — laisser le point inventerait un point final au milieu de la
+  phrase, et le découpage la couperait là.
+- Monnaies avec leurs centimes (*and fifty cents*), pourcentages, heures, chiffres
+  romains après un mot déclencheur (`chapter XIV`).
+
+Le générique suit :
+
+> « Around the Moon », by Jules Verne. Narrated by a synthetic voice.
+>
+> You have been listening to « Around the Moon », by Jules Verne… Recorded in
+> twenty twenty-six. This text is in the public domain.
+
+**Ce qui reste français** : les voix préréglées sont décrites en français et
+sonneront avec un accent. Pour de l'anglais natif, décris une voix anglaise dans
+l'onglet Studio, ou clone une voix anglophone.
+
 ## Partir d'un EPUB
 
 Un `.epub` se charge directement, dans l'onglet **📚 Livre audio** comme en ligne de
@@ -142,14 +264,18 @@ Ce qui en est tiré :
   6 énormes chapitres au lieu de ses 25 vrais. `--no-epub-split` désactive.
 - **Les pages de garde sont écartées** en dessous de `--epub-min-chars`
   caractères (140 par défaut) — une couverture n'est pas un chapitre.
+- **L'appareil éditorial est retiré** : l'en-tête et la licence du projet
+  Gutenberg (17 000 caractères d'anglais juridique, soit ~20 min de narration en
+  fin de livre) sont coupés sur les marqueurs officiels `*** START OF … ***` et
+  `*** END OF … ***`, et une table des matières présente dans le corps du livre
+  est écartée quand la majorité de ses lignes sont des titres de chapitres.
+  **Rien n'est retiré en silence** : chaque suppression est listée dans le plan
+  et sous le bouton de chargement. `--keep-boilerplate` désactive.
 - **Un EPUB protégé par DRM est refusé** avec un message clair, plutôt que narré
   en bruit binaire.
 
-Trois limites à connaître :
+Deux limites à connaître :
 
-- Une **table des matières éditoriale** présente dans le corps du livre est
-  importée comme le reste du texte. Elle apparaît dans le plan avant génération :
-  supprime-la de la zone de texte.
 - Un livre **entièrement contenu dans un seul fichier** reste un seul chapitre :
   avec un seul document, rien ne permet de distinguer un titre de livre au-dessus
   de ses chapitres d'un chapitre au-dessus de ses scènes. Insère des `---` pour
@@ -260,6 +386,137 @@ mêmes 15,8 et 24,1 aux deux extrémités. C'est ce qui lui donne du crédit —
 l'échantillon n'a déplacé aucune borne. Un test verrouille chacune des valeurs
 mesurées, pour qu'un réglage ultérieur ne puisse pas les faire dériver sans alerte.
 
+## Générique de début et de fin
+
+Un livre audio n'est pas seulement le livre lu. **Tous les distributeurs** — ACX
+et Audible, et derrière eux Amazon, Apple Books, Kobo, Google Play — exigent que
+l'enregistrement s'annonce : le premier fichier ouvre sur le titre, l'auteur et
+le narrateur, le dernier les nomme à nouveau. Un dépôt sans générique est refusé
+au contrôle qualité avant même qu'on écoute une ligne du texte.
+
+Le générique est donc **ajouté par défaut**, comme deux chapitres à part entière :
+
+```
+chapitre_001.wav   Générique de début
+chapitre_002.wav   … le livre …
+chapitre_027.wav   Générique de fin
+```
+
+En faire des chapitres est délibéré : ils passent par la même préparation du
+texte, la **même voix et la même graine**, le même mastering et le même cache que
+le livre — ils sonnent donc comme le narrateur, pas comme une annonce rapportée.
+
+```
+.\.venv\Scripts\python.exe scripts\narrate_book.py livre.epub --voice "..." ^
+    --title "Autour de la Lune" --author "Jules Verne" --year 2026 --public-domain
+```
+
+| Option | Effet |
+|---|---|
+| `--narrator "Nom"` | Narrateur humain cité au générique |
+| `--publisher "Studio"` | Production créditée à la fin |
+| `--year 2026` | Année créditée à la fin |
+| `--public-domain` | Ajoute « Texte du domaine public » |
+| `--no-credits` | N'ajoute aucun générique |
+
+Ce que ça donne :
+
+> « Autour de la Lune », de Jules Verne.
+> Lu par une voix de synthèse.
+
+> Vous venez d'écouter « Autour de la Lune », de Jules Verne, lu par une voix de
+> synthèse. Enregistrement réalisé en deux mille vingt-six. Texte du domaine public.
+
+**La voix de synthèse est déclarée** quand aucun narrateur humain n'est nommé.
+Ce n'est pas une précaution ajoutée par prudence : Audible distribue ces titres
+via un programme séparé et les étiquette comme tels. Faire passer une lecture
+machine pour une performance humaine est ce qui fait fermer un compte. Nommer un
+narrateur avec `--narrator` remplace la mention.
+
+Le plan avant génération dit ce qu'il manque pour une distribution :
+
+```
+Générique   : début et fin ajoutés — manque encore l'auteur
+```
+
+## La chaîne studio : ce que le distributeur ne contrôle pas
+
+Les niveaux ACX disent qu'un chapitre est *acceptable*. Ils ne disent rien de ce
+qu'on entend. Quatre traitements tournent donc sur chaque chapitre assemblé,
+**avant** le calage du niveau (`--no-polish`, ou la case « Chaîne studio ») :
+
+| Étage | Pourquoi |
+|---|---|
+| **Passe-haut à 80 Hz** | Sous 80 Hz il n'y a rien d'une voix, mais du grondement qui mange de la marge et fatigue au casque |
+| **Dé-esseur** | Les sifflantes sont le premier défaut qui trahit une voix de synthèse en français |
+| **Compresseur** | Un livre audio s'écoute en marchant, en voiture : l'écart entre une phrase murmurée et une phrase appuyée doit se resserrer |
+| **Limiteur** | Sans lui, le compresseur **dégrade** le résultat — voir plus bas |
+
+**Le limiteur n'était pas prévu, la mesure l'a imposé.** Le compresseur seul baisse
+les tenues sans toucher les crêtes courtes : le facteur de crête *monte* (17,7 →
+19,0 dB mesuré sur un vrai chapitre), et le plafond de −3 dBFS oblige alors la
+normalisation à reculer, faisant perdre 1,3 LU à tout le chapitre pour quelques
+échantillons. Tenir les crêtes est ce qui permet au reste de sonner à son niveau.
+
+Mesuré sur les trois chapitres d'un livre réellement narré :
+
+| | crête/RMS | bande sifflante | sonie |
+|---|---|---|---|
+| Générique de début | 17,7 → **14,4 dB** | −13,9 → **−17,8 dB** | −20,98 → −20,52 LUFS |
+| Le texte | 14,4 → 14,4 dB | −14,0 → **−15,3 dB** | −20,27 → −19,64 LUFS |
+| Générique de fin | 14,7 → **14,0 dB** | −23,4 → **−25,9 dB** | −20,96 → −20,94 LUFS |
+
+### La sonie en LUFS
+
+ACX raisonne en RMS ; **Spotify, Apple Books et YouTube normalisent en LUFS**
+(ITU-R BS.1770 / EBU R128), qui pondère le spectre comme l'oreille. Un chapitre
+parfaitement calé à −20 dBFS RMS peut arriver trop fort ou trop faible chez eux, et
+rien dans le rapport ACX ne l'aurait dit. La mesure est donc ajoutée au rapport —
+**reportée, jamais éliminatoire** : aucune norme ne fixe une cible unique, et
+inventer un seuil que personne n'exige serait pire que donner le chiffre.
+
+L'implémentation a été **confrontée à ffmpeg** (`-af ebur128`) sur de vrais
+chapitres : −20,98 contre −20,9 ; −20,27 contre −20,2 ; −20,96 contre −20,9.
+
+## Forme des fichiers : ce qu'ACX vérifie en plus du niveau
+
+Un chapitre parfaitement calibré en sonie est quand même refusé s'il **commence
+sur la première syllabe**. La norme porte aussi sur la forme du fichier :
+
+| Contrôle | Norme ACX | Où c'est appliqué |
+|---|---|---|
+| Sonie (RMS) | −23 à −18 dBFS | mastering, une passe par chapitre |
+| Crête | ≤ −3 dBFS | mastering |
+| Bruit de fond | ≤ −60 dBFS | mesuré, reporté |
+| **Silence en tête** | **0,5 à 1 s** | 0,75 s posé par le mastering |
+| **Silence en queue** | **1 à 5 s** | 2 s posées par le mastering |
+| **Durée d'un fichier** | **≤ 120 min** | mesurée, reportée |
+
+`narration/audio.py` mesure les six et `acx_report()` dit lesquels passent. Les
+valeurs par défaut visent le **milieu** de chaque fenêtre, pas son bord : un
+chapitre reste conforme même si le rognage laisse un peu de silence à lui.
+
+## Réparer un segment sans renarrer le livre
+
+Un livre, c'est des heures de calcul. Quand **une** phrase sort tronquée ou
+bafouillée, tout régénérer — même seulement son chapitre — est absurde : le reste
+était bon, et le cache le contient encore.
+
+```
+.\.venv\Scripts\python.exe scripts\repair_segment.py output\book_mon_livre --list
+.\.venv\Scripts\python.exe scripts\repair_segment.py output\book_mon_livre --segment ch003/seg012
+```
+
+`--list` lit le cache et **ne charge pas le modèle** : savoir ce qui cloche ne doit
+pas coûter une minute d'attente. `--all-fatal` répare d'un coup tout ce qui est
+fatalement défectueux. Une nouvelle prise moins bonne que l'ancienne est **refusée**
+et signalée — relancer la commande en tire une autre.
+
+Cela repose sur le `plan.json` écrit à côté des chapitres, qui mémorise quelle
+entrée du cache contient quelle phrase. Un livre narré avant que ce fichier existe
+se rattrape en relançant `narrate_book.py` avec les mêmes arguments : tout vient du
+cache, donc **c'est affaire de secondes** (mesuré : 23 s sur un livre déjà narré).
+
 ## Assemblage en un fichier unique
 
 ```
@@ -268,14 +525,95 @@ mesurées, pour qu'un réglage ultérieur ne puisse pas les faire dériver sans 
     --title "Mon Livre" --author "Edwin" --format m4b
 ```
 
-**ffmpeg n'est pas installé sur cette machine.** Ce n'est pas bloquant : le script
-produit quand même le WAV complet et le fichier de marqueurs, puis affiche la commande
-exacte à lancer une fois ffmpeg installé. Les heures de synthèse ne sont jamais perdues
-à cause d'un encodeur manquant.
+**Sans ffmpeg, rien n'est perdu** : le script produit quand même le WAV complet et le
+fichier de marqueurs, puis affiche la commande exacte à lancer une fois ffmpeg installé.
+Les heures de synthèse ne dépendent jamais d'un encodeur manquant.
+
+Pour l'installer sous Windows, sans droits administrateur :
+
+```
+winget install --id Gyan.FFmpeg -e --scope user
+```
+
+Il faut ensuite **rouvrir le terminal** pour que le `PATH` soit pris en compte.
+
+**La couverture du livre est reprise automatiquement** quand la source est un
+`.epub` : elle est extraite à côté des chapitres (`couverture.jpg`) et intégrée
+au M4B. `--cover mon_image.jpg` impose la tienne, `--no-cover` n'en met aucune.
+
+**Le débit** vaut par défaut **64 kbps AAC** pour un M4B et **128 kbps** pour un MP3.
+Ce n'est pas un compromis : 64k AAC mono est à peu près ce qu'Audible diffuse
+lui-même pour un livre audio fini, et la parole ne gagne quasiment rien au-dessus.
+`--bitrate 192k` (ou le menu **Débit** dans l'onglet) le monte, pour une copie
+d'archive ou un fichier qui sera ré-encodé ensuite.
 
 Les titres de chapitres viennent, dans l'ordre : de `--titles`, puis d'un fichier
 `titles.txt` à côté des WAV (écrit automatiquement par `narrate_book.py` à partir de la
 première ligne de chaque chapitre), puis des noms de fichiers.
+
+## Déposer chez un distributeur (ACX, Audible, Amazon…)
+
+Le M4B est ce qu'on écoute. **Ce n'est pas ce qu'on dépose.** ACX — et les
+plateformes qui s'alignent dessus — prend **un fichier par chapitre**, encodé à
+une spécification fixe, plus un extrait commercial, et refuse l'ensemble pour des
+détails qui n'ont rien à voir avec la qualité de la narration.
+
+```
+.\.venv\Scripts\python.exe scripts\export_acx.py output\book_mon_livre
+```
+
+Ou d'un seul trait depuis le texte : ajoute `--export-acx` à `narrate_book.py`.
+Le contrôle seul, sans rien produire, est aussi dans l'onglet **📚 Livre audio**,
+bouton **« ✅ Vérifier la conformité de dépôt »**.
+
+```
+output/book_mon_livre/          ->   output/book_mon_livre/acx/
+  chapitre_001.wav                     001 - Generique de debut.mp3
+  chapitre_002.wav                     002 - Chapitre premier.mp3
+  ...                                  ...
+  titles.txt                           extrait_commercial.mp3
+                                       rapport_acx.json
+```
+
+Ce que le script fait :
+
+1. **Contrôle chaque chapitre** sur toute la spécification — sonie, crête, bruit
+   de fond, silence aux deux bouts, durée, taille — et dit lesquels reviendraient,
+   avec la raison en clair.
+2. **Découpe ce qui est trop long**, dans une pause et non au milieu d'un mot.
+   La limite est calculée, pas supposée : à 192 kbps constant, les 120 minutes et
+   les 170 Mo se croisent, et c'est le plus contraignant des deux qui décide
+   (~118 min).
+3. **Extrait un extrait commercial** de 1 à 5 min du premier vrai chapitre —
+   jamais du générique : un acheteur ne se décide pas en entendant le titre.
+4. **Encode en MP3 192 kbps CBR, 44,1 kHz, mono**, ce qui demande ffmpeg.
+
+**Sans ffmpeg, rien n'est perdu** : les WAV sont écrits, les commandes
+d'encodage sont listées dans `acx/encoder.txt`, et l'encodage peut se faire plus
+tard ou sur une autre machine. Des heures de synthèse ne doivent pas dépendre
+d'un binaire manquant.
+
+| Option | Effet |
+|---|---|
+| `--check` | Contrôle et n'écrit rien |
+| `--sample-seconds 240` | Longueur de l'extrait (60 à 300 s) |
+| `--sample-start 60` | Démarre l'extrait plus loin dans le chapitre |
+| `--sample-chapter 4` | Choisit le chapitre à échantillonner |
+| `--no-sample` | Pas d'extrait |
+| `--keep-wav` | Garde les WAV intermédiaires |
+
+**Vérifié pour de vrai** sur un livre narré de bout en bout : les quatre fichiers
+produits sortent en `mp3`, `44100 Hz`, `1 canal`, **débit constant de 192 000 bps**
+exactement, sans en-tête Xing — c'est-à-dire du CBR, et non du VBR déguisé.
+
+Le script **sort en code d'erreur** s'il reste un fichier hors norme, ce qui le
+rend utilisable dans un enchaînement automatisé.
+
+À savoir : le **44,1 kHz est une exigence de format**, pas un gain de qualité —
+la synthèse ne produit pas cette fréquence, le rééchantillonnage se fait à
+l'encodage. Et la limite de taille est lue dans son sens le plus strict
+(170 × 10⁶ octets) : être sous une limite qui s'avère plus large coûte un
+fichier de plus, être au-dessus coûte un dépôt refusé.
 
 ## Prononciation : lexique personnalisé
 
@@ -292,6 +630,32 @@ C'est l'outil pour les noms propres d'un roman, les sigles et les mots étranger
 
 Le remplacement est insensible à la casse et ne s'applique qu'à des mots entiers.
 Les clés commençant par `_` sont des commentaires.
+
+### Les homographes : quand le même mot se dit de deux façons
+
+`« il est »` et `« à l'est »` s'écrivent pareil et ne se prononcent pas pareil.
+Une entrée de lexique qui vise le mot seul casse forcément l'un des deux, donc
+une valeur peut être un **objet à contexte** :
+
+```json
+"est": { "prononcer": "èsste", "après": "à l'|dans l'|vers l'|l'" },
+"plus": { "prononcer": "pluss", "avant": "de|que|d'" }
+```
+
+`après` et `avant` sont des expressions régulières ; seul ce qui suit le contexte
+est remplacé, le contexte lui-même est conservé. Résultat :
+
+```
+La SNCF est à l'est. Il est tard.
+→ La S N C F est à l'èsste. Il est tard.
+```
+
+`conf/pronunciation_fr.json` contient une **série de modèles désactivés** pour les
+pièges classiques du français — *est, fils, couvent, portions, violent, content,
+négligent, plus*. Ils sont désactivés à dessein : **écoutez d'abord**. Si la voix
+lit déjà correctement « le couvent », corriger ne peut que dégrader. Quand vous en
+repérez un faux, retirez le préfixe `_` de la ligne et ajustez l'orthographe
+phonétique à l'oreille.
 
 ## Ce que la préparation du texte corrige (et ses limites)
 

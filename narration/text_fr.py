@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Mapping, Optional
 
@@ -34,6 +35,7 @@ __all__ = [
     "cardinal",
     "ordinal",
     "roman_to_int",
+    "Pronunciation",
     "load_lexicon",
     "DEFAULT_ROMAN_TRIGGERS",
 ]
@@ -283,13 +285,64 @@ def _strip_markdown(text: str) -> str:
     return text
 
 
-def _apply_lexicon(text: str, lexicon: Mapping[str, str]) -> str:
+@dataclass(frozen=True)
+class Pronunciation:
+    """How a written form should be said, and when that applies.
+
+    Without ``after`` and ``before`` this is the plain substitution the lexicon
+    has always done. With them it becomes the only thing that can handle a
+    French homograph: *il est* and *à l'est* are the same three letters and two
+    different words, so a rule that fires on the word alone must either break
+    one of them or do nothing.
+    """
+
+    spoken: str
+    #: Regex that must match immediately before the word — "à l'|dans l'".
+    after: str = ""
+    #: Regex that must match immediately after it.
+    before: str = ""
+
+    @classmethod
+    def parse(cls, value) -> Optional["Pronunciation"]:
+        """Read either form from the lexicon file, or None if it makes no sense.
+
+        A malformed entry is dropped rather than raised on: an optional override
+        file with a typo in it must not take a nine-hour narration down.
+        """
+        if isinstance(value, str):
+            return cls(value) if value else None
+        if isinstance(value, Mapping):
+            spoken = str(value.get("prononcer", "")).strip()
+            if not spoken:
+                return None
+            return cls(
+                spoken=spoken,
+                after=str(value.get("après", value.get("apres", ""))),
+                before=str(value.get("avant", "")),
+            )
+        return None
+
+
+def _apply_lexicon(text: str, lexicon: Mapping[str, object]) -> str:
     """Apply user pronunciation overrides, longest key first so that multi-word
     entries win over their own prefixes."""
     for source in sorted(lexicon, key=len, reverse=True):
-        replacement = lexicon[source]
-        pattern = re.compile(rf"(?<!\w){re.escape(source)}(?!\w)", re.IGNORECASE)
-        text = pattern.sub(lambda _m, r=replacement: r, text)
+        entry = Pronunciation.parse(lexicon[source])
+        if entry is None:
+            continue
+
+        word = rf"(?<!\w){re.escape(source)}(?!\w)"
+        if entry.after:
+            # The preceding context is captured and put back rather than looked
+            # behind: Python's lookbehind must be fixed width, and "à l'|dans l'"
+            # is exactly the kind of alternation that is not.
+            pattern = re.compile(rf"(?P<before>{entry.after})(?P<gap>\s*){word}", re.IGNORECASE)
+            replacement = "\\g<before>\\g<gap>" + entry.spoken.replace("\\", "\\\\")
+        else:
+            pattern = re.compile(word + (rf"(?=\s*(?:{entry.before}))" if entry.before else ""),
+                                 re.IGNORECASE)
+            replacement = entry.spoken.replace("\\", "\\\\")
+        text = pattern.sub(replacement, text)
     return text
 
 
@@ -463,8 +516,11 @@ def load_lexicon(path: str | Path) -> Dict[str, str]:
     if not isinstance(data, dict):
         return {}
     # Keys starting with "_" are comments — JSON has no other way to carry one.
+    # Values are kept as they were written — a string for a plain substitution,
+    # an object for one that only applies in context — and interpreted later by
+    # Pronunciation.parse, which drops whatever it cannot make sense of.
     return {
-        str(k): str(v)
+        str(k): v
         for k, v in data.items()
-        if str(k).strip() and not str(k).startswith("_")
+        if str(k).strip() and not str(k).startswith("_") and Pronunciation.parse(v)
     }

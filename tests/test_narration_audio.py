@@ -50,10 +50,17 @@ class TestMeasurement:
 
 
 class TestAcxReport:
+    @staticmethod
+    def delivered(lead=0.75, tail=2.0):
+        """A chapter shaped the way it would leave the mastering stage."""
+        speech = np.concatenate([sine(2.0), audio.silence(SR, 1.5), sine(2.0)])
+        mastered, _ = audio.normalize_level(speech, SR, target_rms_db=-20.0)
+        return np.concatenate(
+            [audio.silence(SR, lead), mastered, audio.silence(SR, tail)]
+        )
+
     def test_a_correctly_mastered_signal_passes(self):
-        signal = np.concatenate([sine(2.0), audio.silence(SR, 1.5), sine(2.0)])
-        mastered, _ = audio.normalize_level(signal, SR, target_rms_db=-20.0)
-        report = audio.acx_report(mastered, SR)
+        report = audio.acx_report(self.delivered(), SR)
         assert report["compliant"], report
 
     def test_a_too_loud_signal_is_flagged(self):
@@ -64,6 +71,39 @@ class TestAcxReport:
 
     def test_duration_is_reported(self):
         assert audio.acx_report(sine(3.0), SR)["duration_sec"] == pytest.approx(3.0, abs=0.01)
+
+    def test_a_file_opening_on_its_first_syllable_is_flagged(self):
+        """Correct levels, wrong shape — rejected at review all the same."""
+        report = audio.acx_report(self.delivered(lead=0.0), SR)
+        assert not report["head_room_ok"]
+        assert report["rms_ok"]
+        assert not report["compliant"]
+
+    def test_a_file_ending_on_its_last_syllable_is_flagged(self):
+        report = audio.acx_report(self.delivered(tail=0.1), SR)
+        assert not report["tail_room_ok"]
+        assert not report["compliant"]
+
+    def test_too_much_room_tone_is_flagged_too(self):
+        """The windows have an upper bound: dead air is a defect as well."""
+        assert not audio.acx_report(self.delivered(lead=3.0), SR)["head_room_ok"]
+        assert not audio.acx_report(self.delivered(tail=9.0), SR)["tail_room_ok"]
+
+    def test_room_tone_is_measured_in_seconds(self):
+        head, tail = audio.room_tone_sec(self.delivered(lead=0.75, tail=2.0), SR)
+        assert head == pytest.approx(0.75, abs=0.05)
+        assert tail == pytest.approx(2.0, abs=0.05)
+
+    def test_silence_only_is_all_head_room(self):
+        head, tail = audio.room_tone_sec(audio.silence(SR, 3.0), SR)
+        assert head == pytest.approx(3.0, abs=0.01)
+        assert tail == 0.0
+
+    def test_mastering_defaults_land_inside_the_acx_windows(self):
+        """The defaults must produce a compliant file without being tuned."""
+        settings = audio.MasteringSettings()
+        assert audio.ACX_HEAD_ROOM_MIN_SEC <= settings.lead_sec <= audio.ACX_HEAD_ROOM_MAX_SEC
+        assert audio.ACX_TAIL_ROOM_MIN_SEC <= settings.tail_sec <= audio.ACX_TAIL_ROOM_MAX_SEC
 
 
 class TestNormalizeLevel:
@@ -173,9 +213,16 @@ class TestStitch:
         assert audio.speech_rms_db(result, SR) == pytest.approx(-20.0, abs=0.5)
 
     def test_normalization_can_be_skipped(self):
+        # Polish off as well: the studio chain deliberately changes the level
+        # before the normalisation does, and what is under test here is only
+        # that the normalisation itself can be skipped.
         loud = sine(1.0, amplitude=0.5)
-        result = audio.stitch([(loud, 0.0)], SR, audio.MasteringSettings(trim_silence=False),
-                              normalize=False)
+        result = audio.stitch(
+            [(loud, 0.0)],
+            SR,
+            audio.MasteringSettings(trim_silence=False, polish=False),
+            normalize=False,
+        )
         assert audio.peak_db(result) == pytest.approx(audio.peak_db(loud), abs=0.1)
 
     def test_no_segments(self):
@@ -214,3 +261,37 @@ class TestRemoveDc:
 
     def test_empty(self):
         assert audio.remove_dc(np.zeros(0, dtype=np.float32)).size == 0
+
+
+class TestSpeechSeconds:
+    """How much of a file is voice — the measure a transcript is compared with."""
+
+    def test_counts_only_the_speech(self):
+        signal = np.concatenate([audio.silence(SR, 1.0), sine(3.0), audio.silence(SR, 2.0)])
+        assert audio.speech_seconds(signal, SR) == pytest.approx(3.0, abs=0.15)
+
+    def test_pauses_inside_the_speech_are_excluded_too(self):
+        """What separates this from the span between the first and last word."""
+        signal = np.concatenate(
+            [sine(2.0), audio.silence(SR, 1.5), sine(2.0), audio.silence(SR, 1.5), sine(2.0)]
+        )
+        assert audio.speech_seconds(signal, SR) == pytest.approx(6.0, abs=0.3)
+
+    def test_never_exceeds_the_file(self):
+        signal = sine(2.0)
+        assert audio.speech_seconds(signal, SR) <= 2.0
+
+    def test_silence_measures_nothing(self):
+        assert audio.speech_seconds(audio.silence(SR, 3.0), SR) == 0.0
+
+    def test_empty_input_is_not_a_crash(self):
+        assert audio.speech_seconds(np.zeros(0, dtype=np.float32), SR) == 0.0
+        assert audio.speech_seconds(sine(1.0), 0) == 0.0
+
+    def test_level_does_not_change_the_answer(self):
+        """The threshold is relative, so a quiet take measures like a loud one."""
+        loud = np.concatenate([sine(2.0, amplitude=0.5), audio.silence(SR, 2.0)])
+        quiet = np.concatenate([sine(2.0, amplitude=0.005), audio.silence(SR, 2.0)])
+        assert audio.speech_seconds(quiet, SR) == pytest.approx(
+            audio.speech_seconds(loud, SR), abs=0.1
+        )
