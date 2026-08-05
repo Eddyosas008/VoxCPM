@@ -231,7 +231,11 @@ _NUM = rf"\d{{1,3}}(?:[{_SEP}]\d{{3}})+|\d+"
 # otherwise turn the extremely common "Le", "Ce", "De" and "Me" into ordinals —
 # "Le manuscrit" read aloud as "cinquantième manuscrit".
 _RE_ROMAN_ORDINAL = re.compile(r"\b([IVX]|[IVXLCDM]{2,15})(?:e|è?me|ᵉ)\b")
-_RE_TIME = re.compile(r"\b(\d{1,2})\s*[hH]\s*(\d{2})?\b(?!\d)")
+# The minutes carry their own separator: with the space outside the optional
+# group, "9h du matin" matched "9h " and came back as "neuf heuresdu matin".
+# The trailing guard is what keeps "35ha" and "9h305" out — a bare `\b` would
+# let the first of them through as "trente-cinq heures a".
+_RE_TIME = re.compile(r"\b(\d{1,2})\s*[hH](?:\s*(\d{2}))?(?!\w)")
 _RE_CURRENCY = re.compile(rf"({_NUM})(?:,(\d{{1,2}}))?\s*([€$£])")
 _RE_CURRENCY_PREFIX = re.compile(rf"([€$£])\s*({_NUM})(?:,(\d{{1,2}}))?")
 _RE_PERCENT = re.compile(rf"({_NUM}(?:,\d+)?)\s*%")

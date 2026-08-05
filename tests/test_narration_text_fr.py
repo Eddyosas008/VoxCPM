@@ -204,6 +204,30 @@ class TestNormalizeFrench:
     @pytest.mark.parametrize(
         "source,expected",
         [
+            # The space after a whole hour used to be eaten with the minutes
+            # that were not there: "neuf heuresdu matin".
+            ("Il est 9h du matin.", "Il est neuf heures du matin."),
+            ("Vers 20h il rentre.", "Vers vingt heures il rentre."),
+            ("de 9h à 17h", "de neuf heures à dix-sept heures"),
+            # Punctuation hid the defect, and must keep working.
+            ("À 8h, il partit.", "À huit heures, il partit."),
+            ("Il est 9h.", "Il est neuf heures."),
+            # Minutes still read, spaced or not.
+            ("à 14 h 30", "à quatorze heures trente"),
+            ("10h00 pile", "dix heures pile"),
+        ],
+    )
+    def test_a_whole_hour_keeps_the_space_after_it(self, source, expected):
+        assert normalize_french(source) == expected
+
+    @pytest.mark.parametrize("source", ["un champ de 35ha", "9h305 n'est pas une heure"])
+    def test_what_only_looks_like_an_hour_is_left_alone(self, source):
+        """A letter or a digit right after the h means it was never a time."""
+        assert normalize_french(source) == source
+
+    @pytest.mark.parametrize(
+        "source,expected",
+        [
             ("1 250 €", "mille deux cent cinquante euros"),
             ("1 €", "un euro"),
             ("3,50 €", "trois euros cinquante centimes"),
