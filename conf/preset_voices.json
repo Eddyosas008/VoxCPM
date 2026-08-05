@@ -135,5 +135,27 @@
     "lang": "fr",
     "reference": "assets/voices/edwin_derive_v1_phrase.wav",
     "reference_text": "Bienvenue dans cet espace de méditation conçu spécialement pour vous."
+  },
+  {
+    "name": "Aurore — livre audio",
+    "description": "",
+    "seed": 1235,
+    "cfg": 2.0,
+    "diffusion_steps": 10,
+    "normalize": true,
+    "lang": "fr",
+    "reference": "assets/voices/aurore_livre.wav",
+    "reference_text": "Il est neuf heures du matin, dans le bureau parisien d'une grande entreprise de service. Sarah, trente-huit ans, manager depuis cinq ans, entre dans la pièce. Elle a mal dormi. Elle pose son sac, allume son ordinateur. L'écran affiche trois cent quarante-sept mails non lus."
+  },
+  {
+    "name": "Aurore — méditation guidée",
+    "description": "",
+    "seed": 1236,
+    "cfg": 2.0,
+    "diffusion_steps": 10,
+    "normalize": true,
+    "lang": "fr",
+    "reference": "assets/voices/aurore_meditation.wav",
+    "reference_text": "Bienvenue dans cet espace de méditation conçu spécialement pour vous. Pendant les vingt prochaines minutes, je vous invite à mettre en pause vos responsabilités, vos emails et toute forme de distraction pour vous offrir un moment précieux de calme et de recentrage."
   }
 ]
