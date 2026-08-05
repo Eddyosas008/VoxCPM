@@ -157,5 +157,16 @@
     "lang": "fr",
     "reference": "assets/voices/aurore_meditation.wav",
     "reference_text": "Bienvenue dans cet espace de méditation conçu spécialement pour vous. Pendant les vingt prochaines minutes, je vous invite à mettre en pause vos responsabilités, vos emails et toute forme de distraction pour vous offrir un moment précieux de calme et de recentrage."
+  },
+  {
+    "name": "Alex Somerset",
+    "description": "",
+    "seed": 1237,
+    "cfg": 2.0,
+    "diffusion_steps": 10,
+    "normalize": true,
+    "lang": "fr",
+    "reference": "assets/voices/alex_somerset.wav",
+    "reference_text": "Si l'esprit commence à vagabonder, utilisez ce moment comme opportunité pour cultiver patience et bienveillance envers soi-même. Revenez simplement au souffle, sans jugement ni frustration. Nous allons maintenant entamer un cycle respiratoire conscient."
   }
 ]
