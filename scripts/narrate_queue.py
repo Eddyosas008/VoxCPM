@@ -24,6 +24,7 @@ le cache. Renarrer le chapitre entier pour une phrase serait absurde.
 from __future__ import annotations
 
 import argparse
+import shutil
 import json
 import pathlib
 import subprocess
@@ -59,6 +60,10 @@ def main() -> int:
     ap.add_argument("--qc-retries", default="2")
     ap.add_argument("--only", type=int, help="ne traiter que les N premiers")
     ap.add_argument("--skip-repair", action="store_true")
+    ap.add_argument("--keep", choices=("all", "deliverables"), default="all",
+                    help="all : tout garder. deliverables : ne garder que le M4B, "
+                         "l'export ACX et le rapport, et effacer les WAV de chapitre "
+                         "une fois le livre assemblé (un livre pèse ~3 Go de WAV)")
     args = ap.parse_args()
 
     qpath = pathlib.Path(args.queue).resolve()
@@ -83,6 +88,15 @@ def main() -> int:
         if st.get("status") == "done":
             log(f"[{i}/{len(books)}] {slug} : déjà terminé, sauté")
             continue
+
+        # Trois heures de narration meurent mal sur un disque plein : le livre
+        # est perdu et le suivant l'est aussi. S'arrêter avant coûte une
+        # relance, pas une nuit.
+        free_gb = shutil.disk_usage(REPO).free / 1e9
+        if free_gb < 5:
+            log(f"seulement {free_gb:.1f} Go libres — arrêt avant {slug}")
+            log("    rapatriez les livres produits, puis relancez : la file reprend ici")
+            break
 
         txt = qpath.parent / b["txt"]
         outdir = pathlib.Path(args.outroot) / f"book_{slug.replace('-', '_')}"
@@ -136,8 +150,30 @@ def main() -> int:
                     log(f"    réparation incomplète (code {rc})")
 
         wavs = len(list(outdir.glob("*.wav"))) if outdir.is_dir() else 0
+
+        # Un livre laisse ~3 Go de WAV de chapitre derrière lui. Vingt livres
+        # saturent le volume au quatrième, et une file qui meurt d'un disque
+        # plein a produit dix-neuf échecs pour une cause qui n'a rien à voir
+        # avec la narration. Les WAV ne partent qu'une fois le M4B et l'export
+        # ACX écrits : le livrable existe avant que le master ne disparaisse.
+        freed = 0
+        if args.keep == "deliverables" and wavs:
+            m4b = list(outdir.glob("*.m4b")) + list(outdir.glob("*.m4a"))
+            acx = outdir / "acx"
+            if m4b and acx.is_dir() and any(acx.iterdir()):
+                for w in outdir.glob("*.wav"):
+                    freed += w.stat().st_size
+                    w.unlink()
+                for cache in outdir.rglob("seg_*.wav"):
+                    freed += cache.stat().st_size
+                    cache.unlink()
+                log(f"    {freed/1e9:.1f} Go de WAV effacés (M4B et ACX conservés)")
+            else:
+                log(f"    WAV conservés : M4B ou export ACX manquant, rien n'est effacé")
+
         state[slug].update(status="done", minutes=round(mins, 1), chapters_wav=wavs,
-                           repaired=repaired, finished=time.strftime("%Y-%m-%d %H:%M:%S"))
+                           repaired=repaired, freed_gb=round(freed / 1e9, 2),
+                           finished=time.strftime("%Y-%m-%d %H:%M:%S"))
         save()
         log(f"    terminé — {wavs} chapitre(s), {repaired} segment(s) réparé(s)")
 
