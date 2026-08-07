@@ -144,7 +144,10 @@ def encode(wav_path: Path, out_path: Path, ffmpeg: Optional[str]) -> Tuple[bool,
     if not ffmpeg:
         return False, command
     command[0] = ffmpeg
-    result = subprocess.run(command, capture_output=True, text=True)
+    # Comme à l'assemblage : ffmpeg renvoie les métadonnées du livre sur sa
+    # sortie d'erreur, et un shell sans LANG fait retomber Python sur l'ASCII.
+    result = subprocess.run(command, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     if result.returncode != 0:
         print(f"    échec de l'encodage : {result.stderr.strip().splitlines()[-1:]}")
         return False, command

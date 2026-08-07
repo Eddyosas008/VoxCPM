@@ -24,6 +24,7 @@ le cache. Renarrer le chapitre entier pour une phrase serait absurde.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import json
 import pathlib
@@ -39,16 +40,33 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+def child_env() -> dict:
+    """L'environnement des étapes, forcé en UTF-8.
+
+    Lancé par ``ssh machine 'commande'``, le runner hérite d'un shell non
+    interactif où ``LANG`` n'est pas défini. Python y résout alors l'encodage
+    préféré en ASCII, et le premier titre de chapitre accentué fait tomber une
+    étape — après trois heures de narration réussie. Les appels sensibles
+    nomment déjà leur encodage ; ceci couvre ceux qu'on aurait manqués.
+    """
+    env = dict(os.environ)
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("LANG", "C.UTF-8")
+    env.setdefault("LC_ALL", "C.UTF-8")
+    return env
+
+
 def run(cmd: list[str], logfile: pathlib.Path | None = None) -> tuple[int, str]:
     """Lancer une étape. Sa sortie va dans un fichier, pas en mémoire."""
     if logfile:
         with logfile.open("a", encoding="utf-8") as fh:
             fh.write(f"\n$ {' '.join(cmd)}\n")
-            p = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT, cwd=REPO)
+            p = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT,
+                               cwd=REPO, env=child_env())
         tail = logfile.read_text(encoding="utf-8", errors="replace")[-600:]
         return p.returncode, tail
     p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
-                       errors="replace", cwd=REPO)
+                       errors="replace", cwd=REPO, env=child_env())
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
