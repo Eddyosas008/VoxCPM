@@ -121,6 +121,60 @@ def split_text_into_chunks(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> Lis
     return _pack_sentences(text, max_chars)
 
 
+#: A segment carrying fewer speakable characters than this is not a sentence —
+#: it is debris. Two is the smallest useful sentence in French ("Si.", "Va.")
+#: once punctuation is discounted, so anything under three letters or digits
+#: is a fragment that arrived from the source rather than from the prose.
+_MIN_SPEAKABLE = 3
+
+
+def _speakable(text: str) -> int:
+    return sum(1 for c in text if c.isalnum())
+
+
+def _absorb_fragments(segments: List[Segment]) -> List[Segment]:
+    """Fold debris into its neighbour instead of sending it to the engine.
+
+    An EPUB chapter can end on a stray ``-e``: a hyphenated word cut by the
+    file boundary, a stripped tag, a footnote marker. Alone, it is two
+    characters, and the engine given two characters does not fall silent — it
+    babbles for six times the expected duration, which the quality pass then
+    reports as a fatal defect. Regenerating never helps, because the fault is
+    the fragment, not the take: measured on one book, a re-roll turned 0.6s of
+    noise into 1.6s of it.
+
+    Merging costs nothing — the words are read in the same order either way —
+    and it removes the whole class of defect rather than one instance.
+    """
+    if len(segments) < 2:
+        return segments
+
+    out: List[Segment] = []
+    for seg in segments:
+        if _speakable(seg.text) < _MIN_SPEAKABLE and out:
+            previous = out[-1]
+            out[-1] = Segment(
+                text=f"{previous.text} {seg.text}".strip(),
+                # The fragment is now the tail, so the silence that followed it
+                # is the silence that follows the whole.
+                pause_after=seg.pause_after,
+                paragraph=previous.paragraph,
+            )
+        else:
+            out.append(seg)
+
+    # A leading fragment has no predecessor to join; give it its successor.
+    if len(out) > 1 and _speakable(out[0].text) < _MIN_SPEAKABLE:
+        head, following = out[0], out[1]
+        out[1] = Segment(
+            text=f"{head.text} {following.text}".strip(),
+            pause_after=following.pause_after,
+            paragraph=following.paragraph,
+        )
+        out = out[1:]
+    return out
+
+
 def split_into_segments(
     text: str,
     max_chars: int = DEFAULT_MAX_CHARS,
@@ -144,7 +198,7 @@ def split_into_segments(
                     paragraph=paragraph_index,
                 )
             )
-    return segments
+    return _absorb_fragments(segments)
 
 
 def split_chapters(text: str, pattern: Optional[str] = None) -> List[str]:

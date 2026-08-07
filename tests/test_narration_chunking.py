@@ -99,3 +99,37 @@ class TestSplitChapters:
     @pytest.mark.parametrize("separator", ["---", "  ---  ", "---   "])
     def test_separator_tolerates_surrounding_whitespace(self, separator):
         assert split_chapters(f"Un\n{separator}\nDeux") == ["Un", "Deux"]
+
+
+class TestFragmentsAreAbsorbed:
+    """Un fragment de deux caractères ne doit jamais partir seul au moteur.
+
+    Mesuré sur « Rebâtir l'Intimité Après Divorce » : un chapitre EPUB finissait
+    sur ``-e``, reliquat d'un mot coupé à la frontière de fichier. Le moteur,
+    devant deux caractères, a produit 0,6 s de babil là où 0,1 s était attendue,
+    que le contrôle qualité a classé fatal. Régénérer n'y change rien — le
+    second essai a donné 1,6 s de babil au lieu de 0,6.
+    """
+
+    def test_trailing_debris_joins_the_sentence_before_it(self):
+        segments = split_into_segments("Nous entrerons dans celui du corps.\n\n-e")
+        assert len(segments) == 1
+        assert segments[0].text.endswith("-e")
+
+    def test_leading_debris_joins_the_sentence_after_it(self):
+        segments = split_into_segments("»\n\nElle entra sans frapper.")
+        assert len(segments) == 1
+        assert segments[0].text.startswith("»")
+
+    def test_a_short_real_sentence_survives(self):
+        segments = split_into_segments("Oui.\n\nElle répondit enfin.")
+        assert [s.text for s in segments] == ["Oui.", "Elle répondit enfin."]
+
+    def test_a_lone_fragment_is_kept_rather_than_lost(self):
+        # Rien à quoi le rattacher : mieux vaut un défaut signalé qu'un texte
+        # silencieusement supprimé du livre.
+        assert [s.text for s in split_into_segments("-e")] == ["-e"]
+
+    def test_the_pause_of_the_absorbed_tail_is_the_one_kept(self):
+        segments = split_into_segments("Une phrase complète ici.\n\n-e")
+        assert segments[0].pause_after > 0
