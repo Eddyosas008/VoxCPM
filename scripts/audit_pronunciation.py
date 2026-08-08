@@ -92,7 +92,10 @@ def transcrire(paires, device: str):
         if sr != 16000:  # Whisper n'accepte que 16 kHz
             n = int(len(x) * 16000 / sr)
             x = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x).astype("float32")
-        entrees = proc(x, sampling_rate=16000, return_tensors="pt").input_features.to(device)
+        # Whisper se charge en demi-précision : lui donner du float32 lève
+        # « Input type (float) and bias type (c10::Half) should be the same ».
+        entrees = proc(x, sampling_rate=16000, return_tensors="pt").input_features
+        entrees = entrees.to(device=device, dtype=modele.dtype)
         with torch.no_grad():
             ids = modele.generate(entrees, language="fr", task="transcribe", max_new_tokens=440)
         yield texte, proc.batch_decode(ids, skip_special_tokens=True)[0].strip()
