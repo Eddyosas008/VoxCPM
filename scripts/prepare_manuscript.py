@@ -77,6 +77,13 @@ def join_subtitle(chapter: str) -> str:
     # Un sous-titre est court et ne se termine pas ; un paragraphe fait les deux.
     if not suite or len(suite) > 90 or suite.endswith((".", "!", "?", "…")):
         return chapter
+    # « La fin du culte du charisme — Pourquoi l'extraversion a cessé… » porte
+    # déjà son propre tiret : recoller tel quel donnerait deux tirets et un
+    # marqueur tronqué à 80 caractères. Le titre est ce qui précède.
+    for coupure in (" — ", " – ", " : "):
+        if coupure in suite:
+            suite = suite.split(coupure, 1)[0].strip()
+            break
     return "\n\n".join([f"{blocs[0].strip()} — {suite}"] + blocs[2:])
 
 
