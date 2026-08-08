@@ -159,6 +159,12 @@ def main() -> int:
         lexiques = ["conf/pronunciation_fr.json"] + list(b.get("lexicons") or [])
         for lex in lexiques:
             cmd += ["--lexicon", lex]
+        # Sans titre, narrate_book retombe sur le nom du fichier : cinq livres
+        # se sont annoncés « livre-un-esprits-reprogrammes » avant qu'on le
+        # remarque. Un .txt ne porte pas de métadonnées, donc la file les porte.
+        for option, cle in (("--title", "title"), ("--author", "author")):
+            if b.get(cle):
+                cmd += [option, b[cle]]
         rc, tail = run(cmd, blog)
         mins = (time.time() - t0) / 60
         if rc != 0:
