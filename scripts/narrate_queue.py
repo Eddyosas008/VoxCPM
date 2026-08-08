@@ -40,6 +40,17 @@ def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+#: Le nom sous lequel chaque voix est créditée dans les génériques. Un
+#: catalogue lu par la même voix mérite qu'on la nomme, comme un éditeur
+#: crédite une voix virtuelle — la mention « voix de synthèse » reste dite en
+#: plus du nom, jamais à sa place.
+VOICE_NAMES = {
+    "Aurore — livre audio": "Aurore Cabonet",
+    "Aurore — méditation guidée": "Aurore Cabonet",
+    "Alex Somerset": "Gabriel Adam",
+}
+
+
 def child_env() -> dict:
     """L'environnement des étapes, forcé en UTF-8.
 
@@ -136,10 +147,14 @@ def main() -> int:
             continue
 
         t0 = time.time()
-        rc, tail = run([PYTHON, "scripts/narrate_book.py", str(txt), "--voice", b["voice"],
-                        "--device", args.device, "--outdir", str(outdir),
-                        "--qc-retries", args.qc_retries,
-                        "--assemble", "m4b", "--export-acx"], blog)
+        cmd = [PYTHON, "scripts/narrate_book.py", str(txt), "--voice", b["voice"],
+               "--device", args.device, "--outdir", str(outdir),
+               "--qc-retries", args.qc_retries,
+               "--assemble", "m4b", "--export-acx"]
+        nom_voix = b.get("voice_name") or VOICE_NAMES.get(b["voice"], "")
+        if nom_voix:
+            cmd += ["--voice-name", nom_voix]
+        rc, tail = run(cmd, blog)
         mins = (time.time() - t0) / 60
         if rc != 0:
             log(f"    narration échouée après {mins:.0f} min — voir {blog.name}")

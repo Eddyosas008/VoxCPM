@@ -205,6 +205,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--author", default="", help="Author (assembled file, and credits)")
 
     story = parser.add_argument_group("generique")
+    story.add_argument("--voice-name", default="",
+                       help="Nom donné à la voix de synthèse dans les génériques "
+                            "(« Aurore Cabonet »). Le générique dit alors le nom ET "
+                            "qu'il s'agit d'une voix de synthèse : le nom seul "
+                            "créditerait une interprétation qui n'a pas eu lieu.")
     story.add_argument("--narrator", default="",
                        help="Human narrator named in the credits. Left empty, the credits "
                             "disclose a synthetic voice, as distributors require")
@@ -281,6 +286,7 @@ def main() -> int:
         title=args.title or (book.title if book else "") or in_path.stem,
         author=args.author or (book.author if book else ""),
         narrator=args.narrator,
+        voice_name=args.voice_name,
         publisher=args.publisher,
         year=args.year,
         public_domain=args.public_domain,
