@@ -270,3 +270,49 @@ class TestWiring:
         payload = dataclasses.asdict(audio.MasteringSettings())
         assert payload["polish"] is True
         assert all(not isinstance(value, dict) for value in payload.values())
+
+
+class TestExpandDown:
+    """Le fond doit descendre sous la limite ACX sans emporter la voix.
+
+    Une voix clonée hérite du bruit de sa référence : Alex Somerset rend un
+    plancher à -58 dBFS quand Aurore est à -70, et l'ACX refuse au-dessus de
+    -60. Mesuré sur un chapitre réel : -58,7 devient -72,3, pour 1,2 dB de
+    parole en moins que la normalisation qui suit rattrape.
+    """
+
+    def _voix_bruitee(self, sr=44100, secondes=6.0):
+        # Parole intermittente sur un fond constant, comme un chapitre.
+        n = int(sr * secondes)
+        t = np.arange(n) / sr
+        parole = 0.2 * np.sin(2 * np.pi * 150 * t)
+        enveloppe = ((t % 2.0) < 1.0).astype(np.float32)   # 1 s de voix, 1 s de silence
+        fond = 0.0012 * np.random.default_rng(0).standard_normal(n)
+        return (parole * enveloppe + fond).astype(np.float32), sr
+
+    def test_the_floor_comes_down(self):
+        x, sr = self._voix_bruitee()
+        avant = audio.noise_floor_db(x, sr)
+        apres = audio.noise_floor_db(polish.expand_down(x, sr), sr)
+        assert apres < avant - 6
+
+    def test_speech_is_left_almost_alone(self):
+        x, sr = self._voix_bruitee()
+        avant = audio.speech_rms_db(x, sr)
+        apres = audio.speech_rms_db(polish.expand_down(x, sr), sr)
+        assert abs(apres - avant) < 4
+
+    def test_the_reduction_is_capped(self):
+        # Un silence creusé sans limite s'entend comme un trou.
+        x, sr = self._voix_bruitee()
+        y = polish.expand_down(x, sr)
+        creux = 20 * np.log10(np.abs(y).max() / (np.abs(x).max() + 1e-12) + 1e-12)
+        assert creux > -6
+
+    def test_disabling_it_changes_nothing(self):
+        x, sr = self._voix_bruitee()
+        s = polish.PolishSettings(expand=False)
+        assert np.array_equal(polish.expand_down(x, sr, s), audio.as_float_mono(x))
+
+    def test_silence_survives_it(self):
+        assert polish.expand_down(np.zeros(0, dtype=np.float32), 44100).size == 0
