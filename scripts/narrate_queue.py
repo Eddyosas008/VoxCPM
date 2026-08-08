@@ -182,9 +182,20 @@ def main() -> int:
                 for w in outdir.glob("*.wav"):
                     freed += w.stat().st_size
                     w.unlink()
-                for cache in outdir.rglob("seg_*.wav"):
-                    freed += cache.stat().st_size
-                    cache.unlink()
+                # Le gros morceau est le cache de segments : 1680 fichiers,
+                # 1,6 Go par livre, dans un dossier en point que le premier
+                # balayage ne voyait pas — il cherchait « seg_*.wav » alors que
+                # le cache nomme ses entrées autrement. À 1,6 Go le livre, vingt
+                # livres réclament 32 Go sur un volume qui en fait 30.
+                #
+                # Le prix à payer : sans ce cache, repair_segment.py ne peut
+                # plus retoucher le livre. C'est acceptable parce que le
+                # contrôle qualité et la réparation ont déjà eu lieu, juste
+                # au-dessus, et que le M4B et l'export ACX sont écrits.
+                cache_dir = outdir / ".cache"
+                if cache_dir.is_dir():
+                    freed += sum(f.stat().st_size for f in cache_dir.rglob("*") if f.is_file())
+                    shutil.rmtree(cache_dir, ignore_errors=True)
                 log(f"    {freed/1e9:.1f} Go de WAV effacés (M4B et ACX conservés)")
             else:
                 log(f"    WAV conservés : M4B ou export ACX manquant, rien n'est effacé")
