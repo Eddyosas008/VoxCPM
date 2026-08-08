@@ -184,7 +184,7 @@ def main() -> int:
 
         # Réparation ciblée : un segment fatal ne justifie pas de refaire son
         # chapitre, encore moins le livre.
-        repaired = 0
+        repaired = fatal = 0
         if not args.skip_repair:
             rc, out = run([PYTHON, "scripts/repair_segment.py", str(outdir), "--list"])
             # Le marqueur est « FATAL » en capitales (repair_segment.py:68).
@@ -195,9 +195,18 @@ def main() -> int:
             if fatal:
                 log(f"    {fatal} segment(s) fatal(s) — réparation")
                 rc, out = run([PYTHON, "scripts/repair_segment.py", str(outdir),
-                               "--all-fatal", "--device", args.device], blog)
-                repaired = fatal
-                if rc != 0:
+                               "--all-fatal", "--device", args.device])
+                blog.open("a", encoding="utf-8").write(out)
+                # « réparé » disait jusqu'ici « fatal trouvé », ce qui promettait
+                # des corrections qui n'avaient pas eu lieu : repair_segment
+                # conserve l'ancienne prise quand la nouvelle est pire, et il le
+                # dit. Compter ce qu'il dit plutôt que ce qu'on espérait.
+                conserves = out.count("le nouvel essai est moins bon")
+                repaired = max(0, fatal - conserves)
+                if conserves:
+                    log(f"    {repaired} amélioré(s), {conserves} inchangé(s) "
+                        f"(la nouvelle prise était pire)")
+                elif rc != 0:
                     log(f"    réparation incomplète (code {rc})")
 
         wavs = len(list(outdir.glob("*.wav"))) if outdir.is_dir() else 0
@@ -234,6 +243,7 @@ def main() -> int:
                 log(f"    WAV conservés : M4B ou export ACX manquant, rien n'est effacé")
 
         state[slug].update(status="done", minutes=round(mins, 1), chapters_wav=wavs,
+                           fatal_found=fatal,
                            repaired=repaired, freed_gb=round(freed / 1e9, 2),
                            finished=time.strftime("%Y-%m-%d %H:%M:%S"))
         save()
