@@ -346,7 +346,22 @@ def _apply_lexicon(text: str, lexicon: Mapping[str, object]) -> str:
             pattern = re.compile(word + (rf"(?=\s*(?:{entry.before}))" if entry.before else ""),
                                  re.IGNORECASE)
             replacement = entry.spoken.replace("\\", "\\\\")
-        text = pattern.sub(replacement, text)
+
+        if entry.after:
+            text = pattern.sub(replacement, text)
+        else:
+            # La correspondance ignore la casse, donc « Ces » en tête de phrase
+            # tomberait sur « cés » en minuscule. Rendre la majuscule quand le
+            # mot d'origine en portait une : une phrase qui commence en
+            # minuscule est une anomalie gratuite, et la règle vaut pour toutes
+            # les entrées, pas seulement celle qui l'a révélée.
+            def _garder_la_casse(m: re.Match) -> str:
+                trouve = m.group(0)
+                if trouve[:1].isupper() and entry.spoken[:1].islower():
+                    return entry.spoken[:1].upper() + entry.spoken[1:]
+                return entry.spoken
+
+            text = pattern.sub(_garder_la_casse, text)
     return text
 
 
