@@ -29,6 +29,10 @@ import pathlib
 import re
 import sys
 
+# Lancé par `python scripts/x.py`, sys.path[0] est scripts/, pas la racine :
+# même idiome que narrate_book.py et pregenerate_previews.py.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
 
 def main() -> int:
     for stream in (sys.stdout, sys.stderr):
