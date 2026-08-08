@@ -168,3 +168,38 @@ class TestSplitting:
         titles = [entry["title"] for entry in report_of(book / "acx")["files"]]
         assert any("partie 1" in title for title in titles)
         assert any("partie 2" in title for title in titles)
+
+
+class TestSampleChapterChoice:
+    """L'extrait commercial doit venir de l'introduction.
+
+    Auparavant la règle était « le premier chapitre qui n'est pas un générique »,
+    et sur un livre réel elle a choisi la page de titre : l'acheteur entendait le
+    nom du livre récité et n'apprenait rien. Ce qui décide quelqu'un, c'est le
+    propos du livre, et c'est exactement ce que contient une introduction.
+    """
+
+    def test_the_introduction_wins_over_the_title_page(self):
+        titres = [
+            "Générique de début",
+            "Rebâtir l'Intimité Après Divorce",
+            "Introduction — Le mur invisible",
+            "Chapitre 1 — Les Ruines Invisibles",
+            "Générique de fin",
+        ]
+        assert export_acx.sample_chapter_index(titres) == 3
+
+    def test_front_matter_is_skipped_when_there_is_no_introduction(self):
+        titres = ["Générique de début", "Dédicace", "Avertissement médical",
+                  "Chapitre 1 — Le début", "Générique de fin"]
+        assert export_acx.sample_chapter_index(titres) == 4
+
+    @pytest.mark.parametrize("ouverture", ["Avant-propos", "Préface", "Prologue", "Préambule"])
+    def test_every_kind_of_opening_matter_counts(self, ouverture):
+        assert export_acx.sample_chapter_index(["Générique de début", ouverture, "Chapitre 1"]) == 2
+
+    def test_a_book_with_nothing_but_chapters_takes_the_first(self):
+        assert export_acx.sample_chapter_index(["Générique de début", "Chapitre 1", "Générique de fin"]) == 2
+
+    def test_a_book_of_nothing_but_credits_has_no_sample(self):
+        assert export_acx.sample_chapter_index(["Générique de début", "Générique de fin"]) is None
