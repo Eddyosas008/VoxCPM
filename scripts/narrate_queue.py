@@ -154,6 +154,11 @@ def main() -> int:
         nom_voix = b.get("voice_name") or VOICE_NAMES.get(b["voice"], "")
         if nom_voix:
             cmd += ["--voice-name", nom_voix]
+        # Un livre peut avoir ses propres abréviations. Le lexique général est
+        # passé d'abord, le sien ensuite : ils s'empilent, il ne le remplace pas.
+        lexiques = ["conf/pronunciation_fr.json"] + list(b.get("lexicons") or [])
+        for lex in lexiques:
+            cmd += ["--lexicon", lex]
         rc, tail = run(cmd, blog)
         mins = (time.time() - t0) / 60
         if rc != 0:

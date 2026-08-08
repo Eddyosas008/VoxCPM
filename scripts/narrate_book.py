@@ -148,8 +148,11 @@ def build_parser() -> argparse.ArgumentParser:
                            "wording of the credits (default: fr)")
     text.add_argument("--no-text-prep", action="store_true",
                       help="Skip French normalization (numbers, abbreviations, Roman numerals)")
-    text.add_argument("--lexicon", default="conf/pronunciation_fr.json",
-                      help="Pronunciation lexicon JSON (default: conf/pronunciation_fr.json)")
+    text.add_argument("--lexicon", action="append", metavar="FICHIER",
+                      help="Lexique de prononciation JSON. Répétable : les fichiers "
+                           "s'empilent et le dernier gagne, donc un lexique propre à un "
+                           "livre s'ajoute au lexique général plutôt que de le remplacer. "
+                           "Défaut : conf/pronunciation_fr.json")
     text.add_argument("--no-normalize", action="store_true", help="Disable the engine's own text normalization")
     text.add_argument("--chapter-regex", help="Regex (MULTILINE) that separates chapters (default: '^---$')")
     text.add_argument("--epub-min-chars", type=int, default=epub.DEFAULT_MIN_CHARS,
@@ -299,7 +302,10 @@ def main() -> int:
 
     lexicon = {}
     if not args.no_text_prep:
-        lexicon = text_fr.load_lexicon(args.lexicon)
+        # Empiler plutôt que remplacer : un livre qui définit son abréviation
+        # maison ne doit pas perdre au passage les sigles communs.
+        for chemin in (args.lexicon or ["conf/pronunciation_fr.json"]):
+            lexicon.update(text_fr.load_lexicon(chemin))
         prepare = (
             text_en.normalize_english if args.language == "en" else text_fr.normalize_french
         )
