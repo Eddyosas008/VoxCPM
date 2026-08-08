@@ -229,7 +229,7 @@ class TestTheChain:
     def test_nothing_happens_when_everything_is_off(self):
         source = voice_like(2.0)
         off = polish.PolishSettings(
-            highpass_hz=0.0, deess=False, compress=False, limit=False
+            highpass_hz=0.0, expand=False, deess=False, compress=False, limit=False
         )
         assert not off.enabled
         assert np.array_equal(polish.polish(source, SR, off), source)
