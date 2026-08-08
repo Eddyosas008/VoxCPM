@@ -66,6 +66,51 @@ class Block:
         return "\n".join(self.lines).strip()
 
 
+#: A bracketed direction asking the narrator to stop. It is not a word, it is a
+#: silence — so it becomes one, rather than being read out as "PAUSE".
+PAUSE_MARKER = re.compile(r"\[\s*pause\s*\]", re.IGNORECASE)
+
+#: Stage directions in a transcribed testimony. They tell a reader what
+#: happened in the room; spoken aloud they say that the narrator laughed.
+STAGE_DIRECTION = re.compile(
+    r"\[\s*(rire|rires|hésitation|h[ée]sitations|silence(?:\s+prolong[ée])?|soupir|soupirs"
+    r"|pleurs(?:\s+contenus)?|larmes|blanc|sanglots?|se l[èe]ve[^\]]*|s'?arr[êe]te[^\]]*)\s*\]",
+    re.IGNORECASE,
+)
+
+
+def unbracket(text: str) -> tuple[str, list[str]]:
+    """Deal with the square brackets a manuscript carries, by what they mean.
+
+    A corpus of twenty books held 993 of them in 24 forms, and they are not one
+    thing. ``[PAUSE]``, 969 times over, is an instruction to stop talking.
+    ``[rire]`` is a stage direction in a transcribed testimony. But
+    ``[nom du département]`` and ``[ton mari / ta femme]`` are the sentence
+    itself — a blank the reader fills — and deleting them leaves a hole where
+    the meaning was.
+
+    So: a pause becomes a paragraph break, a stage direction goes, and anything
+    else keeps its words and loses only its brackets. Brackets are never
+    spoken; what is inside them sometimes is.
+    """
+    removed: list[str] = []
+
+    def note(kind: str, m: re.Match) -> str:
+        removed.append(f"{kind} : {m.group(0)}")
+        return ""
+
+    text = PAUSE_MARKER.sub(lambda m: note("pause", m) or "\n\n", text)
+    text = STAGE_DIRECTION.sub(lambda m: note("didascalie", m), text)
+
+    def keep_inside(m: re.Match) -> str:
+        inner = m.group(1).strip()
+        removed.append(f"crochets retirés : {m.group(0)}")
+        return inner
+
+    text = re.sub(r"\[([^\]\n]{1,80})\]", keep_inside, text)
+    return text, removed
+
+
 def strip_inline(text: str) -> str:
     """Remove the marks that are silent on a page and spoken by an engine."""
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)          # images: nothing to say
@@ -186,7 +231,11 @@ def main() -> int:
         return 1
 
     md = src.read_text(encoding="utf-8", errors="replace")
+    # Avant tout découpage : un « [PAUSE] » devenu saut de paragraphe doit
+    # pouvoir séparer deux paragraphes, ce que le parseur lira ensuite.
+    md, removed_brackets = unbracket(md)
     blocks, removed_parse = parse(md)
+    removed_parse = removed_parse + removed_brackets
     chapters, removed_struct = to_chapters(blocks)
 
     if not chapters:
@@ -207,7 +256,10 @@ def main() -> int:
 
     counts: dict[str, int] = {}
     for r in removed_parse:
-        counts[r] = counts.get(r, 0) + 1
+        # Grouper par nature : 969 lignes « pause : [PAUSE] » n'apprennent rien
+        # de plus qu'une seule ligne disant 969.
+        cle = r.split(" : ")[0] if " : " in r else r
+        counts[cle] = counts.get(cle, 0) + 1
     if counts or removed_struct:
         print("\nRetiré :")
         for k, n in sorted(counts.items()):
