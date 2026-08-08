@@ -83,12 +83,76 @@ class Segment:
     paragraph: int = 0
 
 
+#: Where a sentence too long to send whole may be cut, best first. A colon or a
+#: semicolon already carries a pause in the reading; a comma carries a lighter
+#: one; a dash lighter still. All of them are places a narrator breathes.
+_CLAUSE_BOUNDARIES = ("; ", " : ", ", ", " — ", " – ")
+
+
+def _split_long_sentence(sentence: str, max_chars: int) -> List[str]:
+    """Cut an over-long sentence at the places a narrator would breathe.
+
+    This used to hand the sentence over whole, on the reasoning that a cut
+    mid-clause is more audible than a slightly long segment. Measurement says
+    otherwise: an over-long segment is not read slightly long, it is *truncated*
+    by the engine. Across one book, the defect rate was 4-8% below three hundred
+    characters, 20% between three and four hundred, and 100% on the single
+    679-character segment — which came back as 679 characters in 16.2s where
+    34s were needed, i.e. half the sentence simply missing.
+
+    Half a sentence lost is worse than a comma turned into a breath.
+    """
+    if len(sentence) <= max_chars:
+        return [sentence]
+
+    for boundary in _CLAUSE_BOUNDARIES:
+        if boundary not in sentence:
+            continue
+        # Split so the separator stays attached to the clause it closes:
+        # `"a, b".split(", ")` would drop the comma, and a comma dropped is a
+        # breath the narrator no longer takes.
+        parts = re.split(f"({re.escape(boundary)})", sentence)
+        tokens = [
+            (parts[i] + (parts[i + 1] if i + 1 < len(parts) else "")).strip()
+            for i in range(0, len(parts), 2)
+        ]
+        tokens = [t for t in tokens if t]
+
+        pieces, current = [], ""
+        for token in tokens:
+            candidate = f"{current} {token}" if current else token
+            if current and len(candidate) > max_chars:
+                pieces.append(current)
+                current = token
+            else:
+                current = candidate
+        if current:
+            pieces.append(current)
+        # Only accept a boundary that actually solved the problem; a sentence
+        # whose commas all sit in the first ten words is not helped by them.
+        if pieces and all(len(p) <= max_chars for p in pieces):
+            return pieces
+
+    # No usable boundary. Sending it whole loses half of it, so fall back to
+    # word boundaries: audible, but every word survives.
+    words, pieces, current = sentence.split(), [], ""
+    for word in words:
+        candidate = f"{current} {word}" if current else word
+        if current and len(candidate) > max_chars:
+            pieces.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        pieces.append(current)
+    return pieces or [sentence]
+
+
 def _pack_sentences(text: str, max_chars: int) -> List[str]:
     """Greedily pack whole sentences into chunks no longer than ``max_chars``.
 
-    A single sentence longer than the limit becomes its own chunk: splitting it
-    further would cut mid-clause, which is far more audible than a slightly long
-    segment.
+    A sentence longer than the limit is cut at clause boundaries rather than
+    sent whole — see ``_split_long_sentence`` for why that trade was reversed.
     """
     text = (text or "").strip()
     if not text:
@@ -101,7 +165,7 @@ def _pack_sentences(text: str, max_chars: int) -> List[str]:
             if current:
                 chunks.append(current)
                 current = ""
-            chunks.append(sentence)
+            chunks.extend(_split_long_sentence(sentence, max_chars))
         elif current and len(current) + 1 + len(sentence) > max_chars:
             chunks.append(current)
             current = sentence

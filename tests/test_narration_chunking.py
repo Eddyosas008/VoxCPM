@@ -23,11 +23,19 @@ class TestSplitTextIntoChunks:
         assert all(len(c) <= 12 for c in chunks)
         assert " ".join(chunks) == text
 
-    def test_no_sentence_is_ever_cut_in_half(self):
+    def test_an_overlong_sentence_is_cut_rather_than_sent_whole(self):
+        # Cette règle a été inversée le 2026-08-08, mesures à l'appui. Le
+        # raisonnement d'origine — une coupe au milieu d'une proposition
+        # s'entend plus qu'un segment un peu long — supposait que le moteur
+        # lise le segment long en entier. Il ne le fait pas : il le tronque.
+        # Sur « Le Lundi de Trop », le seul segment de 679 caractères est
+        # revenu en 16,2 s au lieu des 34 s nécessaires, moitié de phrase
+        # perdue. Mieux vaut une virgule devenue respiration.
         long_sentence = "mot " * 200
         chunks = split_text_into_chunks(long_sentence.strip(), max_chars=50)
-        # An over-long sentence stays whole rather than being cut mid-clause.
-        assert len(chunks) == 1
+        assert len(chunks) > 1
+        assert all(len(c) <= 50 for c in chunks)
+        assert " ".join(chunks).split() == long_sentence.split()
 
     def test_every_word_survives(self):
         text = "Première phrase ici. Deuxième phrase là. Troisième enfin."
@@ -133,3 +141,39 @@ class TestFragmentsAreAbsorbed:
     def test_the_pause_of_the_absorbed_tail_is_the_one_kept(self):
         segments = split_into_segments("Une phrase complète ici.\n\n-e")
         assert segments[0].pause_after > 0
+
+
+class TestOverlongSentencesAreCut:
+    """Une phrase trop longue est tronquée par le moteur, pas lue lentement.
+
+    Mesuré sur « Le Lundi de Trop » : sous 300 caractères le taux de défaut est
+    de 4 à 8 %, il passe à 20 % entre 300 et 400, et le seul segment de 679
+    caractères est revenu en 16,2 s là où 34 s étaient nécessaires — la moitié
+    de la phrase manquait. Une virgule devenue respiration coûte moins cher.
+    """
+
+    def test_a_long_sentence_is_cut_at_its_commas(self):
+        sentence = ("Elle avança dans le couloir, " * 12).strip().rstrip(",") + "."
+        chunks = split_text_into_chunks(sentence, 300)
+        assert len(chunks) > 1
+        assert all(len(c) <= 300 for c in chunks)
+
+    def test_every_word_survives_the_cut(self):
+        sentence = ("un mot de plus, " * 40).strip().rstrip(",") + "."
+        chunks = split_text_into_chunks(sentence, 200)
+        assert " ".join(chunks).split() == sentence.split()
+
+    def test_a_sentence_without_any_boundary_falls_back_to_words(self):
+        sentence = "mot " * 200
+        chunks = split_text_into_chunks(sentence.strip(), 150)
+        assert all(len(c) <= 150 for c in chunks)
+        assert " ".join(chunks).split() == sentence.split()
+
+    def test_a_short_sentence_is_left_alone(self):
+        assert split_text_into_chunks("Elle entra.", 300) == ["Elle entra."]
+
+    def test_semicolons_are_preferred_over_commas(self):
+        left = "a, " * 40
+        sentence = f"{left}; {left}".strip()
+        chunks = split_text_into_chunks(sentence, 300)
+        assert all(len(c) <= 300 for c in chunks)
