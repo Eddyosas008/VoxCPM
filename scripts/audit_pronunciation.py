@@ -126,6 +126,49 @@ def recoller_sigles(jetons: list[str]) -> list[str]:
     return sortie
 
 
+#: Mots que la méthode ne peut pas juger. Whisper corrige ce qu'il entend
+#: d'après le sens, donc « ce livres » revient « ces livres » : un mot
+#: grammatical n'apparaît dans le rapport que par accident de transcription, et
+#: en nombre il le rend illisible. Ceux-là restent l'affaire de l'oreille.
+GRAMMATICAUX = set("""
+le la les un une des du de d au aux à a et ou ni mais or donc car que qui quoi
+dont où ce cet cette ces ceux celle celles il elle ils elles on nous vous je tu
+me te se lui leur leurs mon ma mes ton ta tes son sa ses notre nos votre vos
+en y est sont était étaient sera seront été être avoir ai as ont avait avaient
+pour par sur sous dans vers chez avec sans entre après avant depuis pendant
+plus moins très trop peu bien tout tous toute toutes même aussi encore déjà
+comme quand si ne pas non oui alors ainsi cela ceci celui
+""".split())
+
+#: Les nombres écrits en toutes lettres par le normaliseur reviennent en
+#: chiffres de la transcription : « mille neuf cent quatre-vingts » contre
+#: « 1980 ». La prononciation est juste, l'orthographe seule diffère.
+NOMBRES = set("""
+zéro un deux trois quatre cinq six sept huit neuf dix onze douze treize
+quatorze quinze seize vingt vingts trente quarante cinquante soixante cent
+cents mille milles million millions milliard milliards demi premier première
+""".split())
+
+
+def interessant(mot: str) -> bool:
+    """Un mot dont une divergence dit quelque chose.
+
+    Un nom propre, un sigle, un mot étranger n'ont pas de filet grammatical :
+    si la transcription s'en écarte, c'est que la prononciation s'en écartait.
+    """
+    plat = pliable(mot)
+    if not plat or len(plat) < 3:
+        return False
+    if plat in GRAMMATICAUX:
+        return False
+    # « quatre-vingt-dix » est un nombre autant que « dix » : tester chaque
+    # partie, sinon les composés passent le filtre et polluent le rapport.
+    parties = [pliable(p) for p in re.split(r"[-']", mot) if p]
+    if parties and all(p in NOMBRES or p in GRAMMATICAUX for p in parties):
+        return False
+    return plat not in NOMBRES
+
+
 def comparer(source: str, entendu: str) -> list[tuple[str, str]]:
     """Les mots de la source que la transcription ne retrouve pas.
 
@@ -138,7 +181,7 @@ def comparer(source: str, entendu: str) -> list[tuple[str, str]]:
         cle = pliable(m)
         if vus[cle] > 0:
             vus[cle] -= 1
-        else:
+        elif interessant(m):
             manquants.append((m, entendu))
     return manquants
 
@@ -171,6 +214,21 @@ def main() -> int:
 
     # Échantillonner régulièrement plutôt qu'au hasard : un livre change de
     # sujet en avançant, et les noms propres n'arrivent pas tous au début.
+    # Un segment tronqué a perdu ses mots par troncature, pas par prononciation :
+    # le contrôle qualité s'en occupe déjà, et les compter ici ferait remonter
+    # des mots parfaitement dits qui n'ont simplement jamais été prononcés.
+    rapport_qc = d / "qc_report.json"
+    tronques = set()
+    if rapport_qc.is_file():
+        try:
+            details = json.loads(rapport_qc.read_text(encoding="utf-8")).get("details", [])
+            tronques = {e["segment"] for e in details
+                        if any(i["code"] in ("truncated", "runaway") for i in e.get("issues", []))}
+        except (OSError, ValueError):
+            pass
+    if tronques:
+        print(f"{len(tronques)} segment(s) tronqué(s) exclus de l'audit\n")
+
     pas = max(1, len(paires) // args.sample)
     echantillon = paires[::pas][: args.sample]
     print(f"{len(paires)} segments en cache, {len(echantillon)} relus\n")
