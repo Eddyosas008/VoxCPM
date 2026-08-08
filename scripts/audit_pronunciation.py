@@ -1,0 +1,199 @@
+"""Trouver les mots que le moteur a mal prononcés, sans les écouter.
+
+Le problème d'échelle. Corriger la prononciation demande de savoir quels mots
+sonnent faux ; le savoir demande d'écouter ; et personne n'écoutera trois cents
+livres. Il faut un arbitre qui ne soit pas une oreille.
+
+Cet arbitre est la reconnaissance vocale. On fait relire par une machine ce
+qu'une autre machine vient de dire, et on compare au texte de départ. Là où la
+transcription s'écarte de la source, la prononciation est suspecte : Whisper
+n'invente pas « Guébrou » s'il a entendu « Gebru ».
+
+Rien n'est à re-narrer pour cela. Le cache de segments garde côte à côte le
+texte demandé et l'audio produit — exactement les deux termes de la
+comparaison.
+
+**Ce que la méthode ne voit pas.** Whisper corrige ce qu'il entend d'après le
+sens : si le moteur dit « ce livres », il transcrira « ces livres », parce que
+la grammaire le lui souffle. Les mots grammaticaux échappent donc à l'audit, et
+c'est l'oreille qui les attrape — comme « ces » l'a été. En revanche les noms
+propres, les sigles, les mots étrangers et les nombres n'ont pas de filet
+grammatical : là, la divergence est franche et l'audit les trouve.
+
+    python scripts/audit_pronunciation.py output/book_mon_livre --sample 120
+"""
+from __future__ import annotations
+
+import argparse
+import collections
+import json
+import pathlib
+import re
+import sys
+import unicodedata
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+MODELE = "openai/whisper-large-v3-turbo"
+
+
+def mots(texte: str) -> list[str]:
+    return re.findall(r"[0-9A-Za-zÀ-ÿ''-]+", texte or "")
+
+
+def pliable(mot: str) -> str:
+    """Forme comparable : sans accent, sans casse, sans trait d'union.
+
+    Whisper ponctue et accentue à sa façon ; une différence d'accent n'est pas
+    une différence de prononciation, et compter les deux ferait crouler le
+    rapport sous du bruit.
+    """
+    plat = unicodedata.normalize("NFKD", mot.lower())
+    plat = "".join(c for c in plat if not unicodedata.combining(c))
+    return plat.replace("-", "").replace("'", "").replace("'", "")
+
+
+def charger_cache(directory: pathlib.Path) -> list[tuple[str, pathlib.Path]]:
+    """Les paires (texte demandé, audio produit) que le cache garde."""
+    cache = directory / ".cache"
+    if not cache.is_dir():
+        return []
+    paires = []
+    for j in sorted(cache.glob("*.json")):
+        w = j.with_suffix(".wav")
+        if not w.exists():
+            continue
+        try:
+            texte = json.loads(j.read_text(encoding="utf-8")).get("text")
+        except (OSError, ValueError):
+            continue
+        if texte:
+            paires.append((texte, w))
+    return paires
+
+
+def transcrire(paires, device: str):
+    """Faire relire l'audio par Whisper, segment par segment."""
+    import numpy as np
+    import soundfile as sf
+    import torch
+    from transformers import WhisperForConditionalGeneration, WhisperProcessor
+
+    # Le pipeline() de transformers 5 décode l'audio via torchcodec, dont les
+    # DLL réclament un ffmpeg partagé. Le cache est en WAV : soundfile suffit,
+    # et rien ne dépend d'un binaire installé.
+    proc = WhisperProcessor.from_pretrained(MODELE)
+    modele = WhisperForConditionalGeneration.from_pretrained(MODELE).to(device).eval()
+
+    for i, (texte, chemin) in enumerate(paires, 1):
+        x, sr = sf.read(str(chemin), dtype="float32")
+        if x.ndim > 1:
+            x = x.mean(axis=1)
+        if sr != 16000:  # Whisper n'accepte que 16 kHz
+            n = int(len(x) * 16000 / sr)
+            x = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x).astype("float32")
+        entrees = proc(x, sampling_rate=16000, return_tensors="pt").input_features.to(device)
+        with torch.no_grad():
+            ids = modele.generate(entrees, language="fr", task="transcribe", max_new_tokens=440)
+        yield texte, proc.batch_decode(ids, skip_special_tokens=True)[0].strip()
+        if i % 20 == 0:
+            print(f"    {i}/{len(paires)} segments relus", flush=True)
+
+
+def recoller_sigles(jetons: list[str]) -> list[str]:
+    """« T. D. A. H. » redevient « TDAH ».
+
+    Un sigle correctement épelé revient de la transcription en lettres
+    séparées. C'est la bonne prononciation, écrite autrement ; le compter comme
+    une faute noierait le rapport sous les sigles qui vont bien.
+    """
+    sortie: list[str] = []
+    tampon: list[str] = []
+    for j in jetons + [""]:
+        if len(j) == 1 and j.isalpha():
+            tampon.append(j)
+            continue
+        if len(tampon) >= 2:
+            sortie.append("".join(tampon))
+        else:
+            sortie.extend(tampon)
+        tampon = []
+        if j:
+            sortie.append(j)
+    return sortie
+
+
+def comparer(source: str, entendu: str) -> list[tuple[str, str]]:
+    """Les mots de la source que la transcription ne retrouve pas.
+
+    Comparaison par ensemble plutôt que par alignement : un mot avalé décale
+    tout le reste, et on cherche les mots fautifs, pas leur position.
+    """
+    vus = collections.Counter(pliable(m) for m in recoller_sigles(mots(entendu)))
+    manquants = []
+    for m in mots(source):
+        cle = pliable(m)
+        if vus[cle] > 0:
+            vus[cle] -= 1
+        else:
+            manquants.append((m, entendu))
+    return manquants
+
+
+def main() -> int:
+    for flux in (sys.stdout, sys.stderr):
+        try:
+            flux.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("directory", help="dossier d'un livre narré (contenant .cache)")
+    ap.add_argument("--sample", type=int, default=150,
+                    help="nombre de segments à relire (défaut : 150)")
+    ap.add_argument("--device", default="cuda")
+    ap.add_argument("--min", type=int, default=2,
+                    help="occurrences minimales pour figurer au rapport (défaut : 2)")
+    ap.add_argument("--json", help="écrire le rapport ici")
+    args = ap.parse_args()
+
+    d = pathlib.Path(args.directory)
+    paires = charger_cache(d)
+    if not paires:
+        print(f"aucun cache de segments dans {d}. Le livre a-t-il été balayé "
+              f"(--keep deliverables) ? L'audit doit tourner avant le balayage.",
+              file=sys.stderr)
+        return 1
+
+    # Échantillonner régulièrement plutôt qu'au hasard : un livre change de
+    # sujet en avançant, et les noms propres n'arrivent pas tous au début.
+    pas = max(1, len(paires) // args.sample)
+    echantillon = paires[::pas][: args.sample]
+    print(f"{len(paires)} segments en cache, {len(echantillon)} relus\n")
+
+    suspects: collections.Counter = collections.Counter()
+    exemples: dict[str, str] = {}
+    for source, entendu in transcrire(echantillon, args.device):
+        for mot, contexte in comparer(source, entendu):
+            suspects[mot] += 1
+            exemples.setdefault(mot, contexte[:110])
+
+    retenus = [(m, n) for m, n in suspects.most_common() if n >= args.min]
+    print(f"\n{len(suspects)} mot(s) non retrouvé(s), {len(retenus)} vu(s) au moins {args.min} fois\n")
+    for mot, n in retenus[:40]:
+        print(f"  {n:>3} × {mot:<26} entendu : « …{exemples[mot][:70]}… »")
+
+    if args.json:
+        pathlib.Path(args.json).write_text(
+            json.dumps({m: {"occurrences": n, "entendu": exemples[m]} for m, n in retenus},
+                       ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"\nrapport : {args.json}")
+
+    print("\nRien n'est corrigé ici. Les candidats passent par try_pronunciation.py,")
+    print("et seul ce qui a été entendu entre dans le lexique.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
