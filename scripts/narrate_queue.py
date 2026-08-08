@@ -89,6 +89,8 @@ def main() -> int:
     ap.add_argument("--qc-retries", default="2")
     ap.add_argument("--only", type=int, help="ne traiter que les N premiers")
     ap.add_argument("--skip-repair", action="store_true")
+    ap.add_argument("--no-synthetic-disclosure", action="store_true",
+                    help="Retirer la mention « voix de synthèse » de tous les génériques")
     ap.add_argument("--keep", choices=("all", "deliverables"), default="all",
                     help="all : tout garder. deliverables : ne garder que le M4B, "
                          "l'export ACX et le rapport, et effacer les WAV de chapitre "
@@ -154,6 +156,11 @@ def main() -> int:
         nom_voix = b.get("voice_name") or VOICE_NAMES.get(b["voice"], "")
         if nom_voix:
             cmd += ["--voice-name", nom_voix]
+        # Choix d'éditeur, porté par la file plutôt que codé ici : la mention
+        # de voix de synthèse est exigée par les plateformes, et la retirer
+        # doit rester une décision visible dans les données.
+        if b.get("no_synthetic_disclosure") or args.no_synthetic_disclosure:
+            cmd += ["--no-synthetic-disclosure"]
         # Un livre peut avoir ses propres abréviations. Le lexique général est
         # passé d'abord, le sien ensuite : ils s'empilent, il ne le remplace pas.
         lexiques = ["conf/pronunciation_fr.json"] + list(b.get("lexicons") or [])

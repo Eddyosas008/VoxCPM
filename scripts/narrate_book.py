@@ -208,6 +208,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--author", default="", help="Author (assembled file, and credits)")
 
     story = parser.add_argument_group("generique")
+    story.add_argument("--no-synthetic-disclosure", action="store_true",
+                       help="Ne pas dire « une voix de synthèse » dans les génériques. "
+                            "ACX, Apple Books et Findaway l'exigent pour une narration "
+                            "générée : le retirer est un choix d'éditeur, pas un réglage "
+                            "de confort, et il expose au rejet ou au retrait.")
     story.add_argument("--voice-name", default="",
                        help="Nom donné à la voix de synthèse dans les génériques "
                             "(« Aurore Cabonet »). Le générique dit alors le nom ET "
@@ -290,6 +295,7 @@ def main() -> int:
         author=args.author or (book.author if book else ""),
         narrator=args.narrator,
         voice_name=args.voice_name,
+        disclose_synthetic=not args.no_synthetic_disclosure,
         publisher=args.publisher,
         year=args.year,
         public_domain=args.public_domain,
