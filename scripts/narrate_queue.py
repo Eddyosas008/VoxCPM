@@ -169,7 +169,8 @@ def main() -> int:
         # Sans titre, narrate_book retombe sur le nom du fichier : cinq livres
         # se sont annoncés « livre-un-esprits-reprogrammes » avant qu'on le
         # remarque. Un .txt ne porte pas de métadonnées, donc la file les porte.
-        for option, cle in (("--title", "title"), ("--author", "author")):
+        for option, cle in (("--title", "title"), ("--author", "author"),
+                            ("--cover", "cover")):
             if b.get(cle):
                 cmd += [option, b[cle]]
         rc, tail = run(cmd, blog)

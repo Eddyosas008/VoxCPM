@@ -52,6 +52,33 @@ DROP_ALWAYS = re.compile(r"^\s*(table des mati[èe]res|sommaire|remerciements?|b
 # two words, it belongs to the chapter that follows.
 PART_HEADING = re.compile(r"^\s*partie\b", re.IGNORECASE)
 
+#: Un en-tête qui ne dit que son rang : « Chapitre 4 », « Introduction ». Le
+#: manuscrit met la vraie formule juste en dessous, en niveau 2 — et comme le
+#: marqueur du lecteur audio est la première ligne du chapitre, le sommaire
+#: n'affichait que « Chapitre 4 ».
+BARE_HEADING = re.compile(
+    r"^\s*(chapitre\s+[0-9IVXLC]+|introduction|conclusion|[ée]pilogue|prologue"
+    r"|avant[- ]propos|pr[ée]face|annexes?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def join_subtitle(chapter: str) -> str:
+    """« Chapitre 1 » + « Le grand malentendu » = un titre qui dit quelque chose.
+
+    Utile deux fois : le sommaire devient lisible sur un téléphone, et
+    l'annonce sonne juste, parce qu'un narrateur lit le titre entier plutôt que
+    son numéro seul.
+    """
+    blocs = chapter.split("\n\n")
+    if len(blocs) < 2 or not BARE_HEADING.match(blocs[0].strip()):
+        return chapter
+    suite = blocs[1].strip()
+    # Un sous-titre est court et ne se termine pas ; un paragraphe fait les deux.
+    if not suite or len(suite) > 90 or suite.endswith((".", "!", "?", "…")):
+        return chapter
+    return "\n\n".join([f"{blocs[0].strip()} — {suite}"] + blocs[2:])
+
 
 @dataclass
 class Block:
@@ -206,6 +233,7 @@ def to_chapters(blocks: List[Block]) -> tuple[List[str], List[str]]:
     if current:
         chapters.append("\n\n".join(current).strip())
 
+    chapters = [join_subtitle(c) for c in chapters]
     return [c for c in chapters if c.strip()], removed
 
 
