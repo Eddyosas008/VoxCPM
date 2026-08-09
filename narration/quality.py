@@ -106,6 +106,12 @@ class QualityThresholds:
     truncated_chars_per_second: float = 35.0
     #: Below this, there is far more audio than the text can account for.
     runaway_chars_per_second: float = 6.0
+    #: En deçà, le débit ne mesure plus rien. Un mot seul — « Dédicace »,
+    #: « ÉPILOGUE », un titre de chapitre isolé — prend une seconde quelle que
+    #: soit sa longueur, et la règle du débit le déclarait alors emballé.
+    #: Mesuré : deux « défauts » sur trois d'un livre étaient des titres, et
+    #: leurs réparations échouaient parce qu'il n'y avait rien à réparer.
+    min_chars_for_rate: int = 25
     #: Segments shorter than this are treated as a failed generation outright.
     min_duration_sec: float = 0.2
     #: A segment whose peak sits below this carries no speech at all.
@@ -374,7 +380,10 @@ def inspect_segment(
                     f"{characters} caractères en {duration:.1f}s (~{expected:.1f}s attendues)",
                 )
             )
-        elif rate < thresholds.runaway_chars_per_second:
+        elif (
+            rate < thresholds.runaway_chars_per_second
+            and characters >= thresholds.min_chars_for_rate
+        ):
             expected = characters / thresholds.expected_chars_per_second
             issues.append(
                 Issue(
