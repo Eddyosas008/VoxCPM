@@ -334,3 +334,26 @@ class TestLoadLexicon:
         path = tmp_path / "list.json"
         path.write_text("[1, 2]", encoding="utf-8")
         assert load_lexicon(path) == {}
+
+
+class TestSuperscriptLetters:
+    """« 5ᵉ » n'est pas « 5e », et cette différence a tué une narration.
+
+    Un traitement de texte produit une lettre modificative en exposant (U+1D49)
+    qui ressemble à un « e » sans en être un. La règle des ordinaux ne la voit
+    pas, le fragment traverse la normalisation intact, et le normaliseur interne
+    du moteur meurt dessus — assert len(input) > 0 — après quarante et une
+    minutes de narration. Dix-huit occurrences dans neuf fichiers de la file.
+    """
+
+    def test_a_superscript_ordinal_is_spoken(self):
+        assert normalize_french("la 5ᵉ édition") == "la cinquième édition"
+
+    def test_a_two_digit_superscript_ordinal(self):
+        assert normalize_french("la 11ᵉ édition") == "la onzième édition"
+
+    def test_a_feminine_first(self):
+        assert normalize_french("la 1ʳᵉ fois") == "la première fois"
+
+    def test_the_plain_form_still_works(self):
+        assert normalize_french("la 5e édition") == "la cinquième édition"

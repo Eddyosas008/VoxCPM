@@ -268,11 +268,28 @@ def _spell_decimal(whole: str, frac: str) -> str:
 # --------------------------------------------------------------------------
 
 
+#: Lettres modificatives en exposant, telles qu'un traitement de texte les
+#: produit pour « 5ᵉ » ou « 1ʳᵉ ». Elles ressemblent à leurs équivalents
+#: ordinaires et n'en sont pas : la règle des ordinaux ne les voit pas, « 5ᵉ »
+#: traverse la normalisation intact, et le normaliseur interne du moteur meurt
+#: dessus — assert len(input) > 0, après quarante et une minutes de narration.
+_EXPOSANTS = {
+    "ᵃ": "a", "ᵇ": "b", "ᶜ": "c", "ᵈ": "d", "ᵉ": "e", "ᶠ": "f", "ᵍ": "g",
+    "ʰ": "h", "ⁱ": "i", "ʲ": "j", "ᵏ": "k", "ˡ": "l", "ᵐ": "m", "ⁿ": "n",
+    "ᵒ": "o", "ᵖ": "p", "ʳ": "r", "ˢ": "s", "ᵗ": "t", "ᵘ": "u", "ᵛ": "v",
+    "ʷ": "w", "ˣ": "x", "ʸ": "y", "ᶻ": "z",
+}
+_EXPOSANTS_RE = re.compile("|".join(map(re.escape, _EXPOSANTS)))
+
+
 def _clean_typography(text: str) -> str:
     """Normalise Unicode punctuation to forms the engine handles predictably."""
     text = unicodedata.normalize("NFC", text)
     text = text.replace("’", "'").replace("‘", "'")
     text = text.replace("“", '"').replace("”", '"')
+    # Avant tout le reste : « 5ᵉ » doit redevenir « 5e » pour que la règle des
+    # ordinaux le lise, sinon il arrive intact jusqu'au moteur.
+    text = _EXPOSANTS_RE.sub(lambda m: _EXPOSANTS[m.group(0)], text)
     text = re.sub(r"[   ]", " ", text)
     text = re.sub(r"\.{3,}", "…", text)
     return text
