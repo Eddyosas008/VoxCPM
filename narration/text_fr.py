@@ -268,6 +268,56 @@ def _spell_decimal(whole: str, frac: str) -> str:
 # --------------------------------------------------------------------------
 
 
+def _clean_symbols(text: str) -> str:
+    """Traduire en mots les signes qu'un manuscrit garde et qu'on ne dit pas.
+
+    Un manuscrit n'est pas que de la prose : il porte des restes de mise en
+    page, des cases à cocher, des flèches, de l'écriture inclusive, des
+    commandes de traitement de texte. Le moteur les lit — ou pire, il en lit
+    une partie : ``
+ewpage`` perdait sa barre oblique au nettoyage markdown et
+    devenait « ewpage », prononcé tel quel au milieu d'un chapitre.
+
+    Chaque règle vient d'un relevé sur les vingt et un livres de la file, pas
+    d'une liste imaginée : 571 lignes à remplir, 163 appels de note, 107 points
+    médians, 55 commandes LaTeX, 47 degrés, 26 esperluettes.
+    """
+    # D'abord les commandes de traitement de texte : le nettoyage markdown
+    # mangerait la barre oblique et laisserait « ewpage », lu tel quel.
+    text = re.sub(r"\\[a-zA-Z]+\*?(?:\{[^}]*\})*", " ", text)
+
+    # Unités collées à un nombre. L'ordre compte : sans la règle Celsius avant
+    # la règle générale, « 18,5 °C » deviendrait « 18,5 degrésC ».
+    text = re.sub(r"\s*°\s*C(?![a-zà-ÿ])", " degrés Celsius", text)
+    text = re.sub(r"\s*°\s*F(?![a-zà-ÿ])", " degrés Fahrenheit", text)
+    text = re.sub(r"(\d)\s*°", r"\1 degrés", text)
+
+    # Signes mathématiques au fil d'une phrase.
+    text = re.sub(r"\s*×\s*", " fois ", text)
+    text = re.sub(r"(?<=[\w)])\s*=\s*(?=[\w(])", " égale ", text)
+    text = re.sub(r"\s*&\s*", " et ", text)
+
+    # Flèches et chemins d'interface : « Réglages > Temps d'écran ».
+    text = re.sub(r"\s*[→⟶➜]\s*", " puis ", text)
+    text = re.sub(r"(?<=[a-zà-ÿ0-9])\s*>\s*(?=[A-ZÀ-Þa-zà-ÿ])", " puis ", text)
+
+    # Écriture inclusive : « conjoint·e » se dit « conjoint ou conjointe ». Il
+    # faut le mot entier pour reconstruire la forme accordée ; la terminaison
+    # seule ne suffit pas, et « conjoint ou e » ne veut rien dire.
+    text = re.sub(
+        r"([a-zà-ÿ]{2,})[·‧∙]([a-zà-ÿ]{1,3})(?![a-zà-ÿ])",
+        lambda m: f"{m.group(1)} ou {m.group(1)}{m.group(2)}",
+        text,
+    )
+
+    # Restes de formulaire : lignes à remplir, cases à cocher, appels de note.
+    text = re.sub(r"_{2,}", " ", text)
+    text = re.sub(r"[☐☑✓✗▢]", " ", text)
+    text = re.sub(r"(?<=[a-zà-ÿ])\*(?=[\s,.;:)])", "", text)
+
+    return re.sub(r"[  ]{2,}", " ", text)
+
+
 #: Lettres modificatives en exposant, telles qu'un traitement de texte les
 #: produit pour « 5ᵉ » ou « 1ʳᵉ ». Elles ressemblent à leurs équivalents
 #: ordinaires et n'en sont pas : la règle des ordinaux ne les voit pas, « 5ᵉ »
@@ -519,6 +569,7 @@ def normalize_french(
         return ""
 
     text = _clean_typography(text)
+    text = _clean_symbols(text)
     if strip_markdown:
         text = _strip_markdown(text)
     if lexicon:

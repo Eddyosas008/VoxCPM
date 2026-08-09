@@ -357,3 +357,50 @@ class TestSuperscriptLetters:
 
     def test_the_plain_form_still_works(self):
         assert normalize_french("la 5e édition") == "la cinquième édition"
+
+
+class TestSymbolsAManuscriptKeeps:
+    """Un manuscrit n'est pas que de la prose.
+
+    Relevé sur les vingt et un livres de la file : 571 lignes à remplir, 163
+    appels de note, 107 points médians, 55 commandes LaTeX, 47 degrés, 26
+    esperluettes, 21 chemins d'interface, 20 flèches, 8 cases à cocher. Chacun
+    se lit à voix haute, ou pire : « \newpage » perdait sa barre oblique au
+    nettoyage markdown et devenait « ewpage », prononcé tel quel.
+    """
+
+    def test_a_word_processor_command_leaves_nothing_behind(self):
+        # La barre oblique doit être littérale : écrite « \n », elle devient un
+        # saut de ligne et le test reproduit le défaut qu'il vérifie.
+        assert "ewpage" not in normalize_french("gratuits. " + chr(92) + "newpage Voici")
+
+    def test_degrees_celsius_are_spoken(self):
+        assert normalize_french("réglé à 18,5 °C") == "réglé à dix-huit virgule cinq degrés Celsius"
+
+    def test_the_celsius_rule_wins_over_the_general_one(self):
+        # Sans l'ordre, « 18,5 °C » deviendrait « 18,5 degrésC ».
+        assert "degrésC" not in normalize_french("réglé à 18,5 °C")
+
+    def test_an_ampersand_becomes_a_word(self):
+        assert normalize_french("Sparrow, Liu & Wegner") == "Sparrow, Liu et Wegner"
+
+    def test_inclusive_writing_is_read_in_full(self):
+        assert normalize_french("votre conjoint·e") == "votre conjoint ou conjointe"
+
+    @pytest.mark.parametrize("source,attendu", [
+        ("Réglages > Temps", "Réglages puis Temps"),
+        ("Tête → visage", "Tête puis visage"),
+    ])
+    def test_arrows_and_interface_paths_become_puis(self, source, attendu):
+        assert normalize_french(source) == attendu
+
+    def test_form_leftovers_are_removed(self):
+        assert "_" not in normalize_french("Date: ___ fin: ___")
+        assert "☐" not in normalize_french("☐ Je consulte")
+
+    def test_a_footnote_marker_is_not_spoken(self):
+        assert normalize_french("Jamie*, trente ans") == "Jamie, trente ans"
+
+    def test_ordinary_prose_is_untouched(self):
+        texte = "Une phrase parfaitement ordinaire, sans aucun signe particulier."
+        assert normalize_french(texte) == texte
