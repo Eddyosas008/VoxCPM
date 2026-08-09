@@ -68,3 +68,40 @@ class TestMarkdownIsNotSpoken:
 
     def test_an_image_says_nothing(self):
         assert prepare_manuscript.strip_inline("![couverture](img.png)") == ""
+
+
+class TestAccentsRestored:
+    """Le moteur lit ce qui est écrit, y compris les fautes du manuscrit.
+
+    Edwin a signalé « degré » prononcé « degre ». Ce n'était pas la synthèse :
+    le manuscrit écrit « degres » sans accent, et le moteur avait raison. Vingt-
+    deux fichiers sur vingt-quatre portent ce défaut — 31 « maniere », 17
+    « difference », 7 « degre(s) ».
+    """
+
+    @pytest.mark.parametrize("faute,juste", [
+        ("degres", "degrés"), ("maniere", "manière"), ("difference", "différence"),
+        ("plongee", "plongée"), ("societe", "société"), ("dedicace", "dédicace"),
+    ])
+    def test_a_lost_accent_comes_back(self, faute, juste):
+        out, notes = prepare_manuscript.restore_accents(f"une {faute} ici")
+        assert juste in out
+        assert notes
+
+    def test_capitalisation_survives(self):
+        out, _ = prepare_manuscript.restore_accents("Dedicace au lecteur")
+        assert out.startswith("Dédicace")
+
+    @pytest.mark.parametrize("ambigu", ["cote", "tache", "sur", "mure", "pecheur"])
+    def test_words_with_two_readings_are_left_alone(self, ambigu):
+        # « la cote atlantique » et « la côte » sont deux mots : corriger à
+        # l'aveugle remplacerait une faute par une autre.
+        texte = f"voici le mot {ambigu} dans sa phrase"
+        out, notes = prepare_manuscript.restore_accents(texte)
+        assert out == texte
+        assert notes == []
+
+    def test_a_clean_text_is_untouched(self):
+        texte = "Un texte déjà correctement accentué, avec ses différences."
+        out, notes = prepare_manuscript.restore_accents(texte)
+        assert out == texte and notes == []

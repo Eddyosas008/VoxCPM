@@ -145,6 +145,58 @@ def unbracket(text: str) -> tuple[str, list[str]]:
     return text, removed
 
 
+#: Mots dont la forme sans accent n'est pas un mot français : la restaurer ne
+#: peut donc pas créer d'ambiguïté. Volontairement court et vérifié à la main —
+#: « cote », « tache », « sur », « mure », « pecheur » ont tous deux lectures
+#: légitimes et n'ont rien à faire ici.
+#:
+#: Pourquoi c'est nécessaire : le manuscrit écrit « degres », le moteur lit
+#: « degre », et l'auditeur entend une faute que personne n'a commise à la
+#: synthèse. Mesuré sur vingt-deux fichiers sur vingt-quatre.
+ACCENTS_PERDUS = {
+    "degre": "degré", "degres": "degrés", "maniere": "manière",
+    "difference": "différence", "differences": "différences",
+    "plongee": "plongée", "societe": "société", "societes": "sociétés",
+    "desir": "désir", "desirs": "désirs", "dedicace": "dédicace",
+    "annee": "année", "annees": "années", "realite": "réalité",
+    "realites": "réalités", "probleme": "problème", "problemes": "problèmes",
+    "systeme": "système", "systemes": "systèmes", "modele": "modèle",
+    "modeles": "modèles", "premiere": "première", "premieres": "premières",
+    "derniere": "dernière", "dernieres": "dernières", "matiere": "matière",
+    "matieres": "matières", "experience": "expérience",
+    "experiences": "expériences", "etre": "être", "etait": "était",
+    "etaient": "étaient", "meme": "même", "memes": "mêmes", "tres": "très",
+    "apres": "après", "present": "présent", "presente": "présente",
+    "reponse": "réponse", "reponses": "réponses", "resultat": "résultat",
+    "resultats": "résultats", "periode": "période", "periodes": "périodes",
+    "sante": "santé", "verite": "vérité", "verites": "vérités",
+}
+_ACCENTS_RE = re.compile(
+    r"(?<![\w'’])(" + "|".join(sorted(ACCENTS_PERDUS, key=len, reverse=True)) + r")(?![\w'’])",
+    re.IGNORECASE,
+)
+
+
+def restore_accents(text: str) -> tuple[str, list[str]]:
+    """Rendre aux mots l'accent que le manuscrit leur a pris.
+
+    Le moteur lit ce qui est écrit : « degres » se dit « degre », et l'auditeur
+    entend une faute de prononciation là où il y a une faute d'orthographe. La
+    corriger dans le texte est la seule réparation juste — un lexique
+    remplacerait un mot mal écrit par une graphie inventée, ce qui empile deux
+    approximations au lieu d'en retirer une.
+    """
+    trouves: list[str] = []
+
+    def remplacer(m: re.Match) -> str:
+        mot = m.group(0)
+        juste = ACCENTS_PERDUS[mot.lower()]
+        trouves.append(f"accent rendu : {mot} → {juste}")
+        return juste[:1].upper() + juste[1:] if mot[:1].isupper() else juste
+
+    return _ACCENTS_RE.sub(remplacer, text), trouves
+
+
 def strip_inline(text: str) -> str:
     """Remove the marks that are silent on a page and spoken by an engine."""
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)          # images: nothing to say
@@ -269,8 +321,9 @@ def main() -> int:
     # Avant tout découpage : un « [PAUSE] » devenu saut de paragraphe doit
     # pouvoir séparer deux paragraphes, ce que le parseur lira ensuite.
     md, removed_brackets = unbracket(md)
+    md, removed_accents = restore_accents(md)
     blocks, removed_parse = parse(md)
-    removed_parse = removed_parse + removed_brackets
+    removed_parse = removed_parse + removed_brackets + removed_accents
     chapters, removed_struct = to_chapters(blocks)
 
     if not chapters:
