@@ -202,6 +202,10 @@ def main() -> int:
     ap.add_argument("--min", type=int, default=2,
                     help="occurrences minimales pour figurer au rapport (défaut : 2)")
     ap.add_argument("--json", help="écrire le rapport ici")
+    ap.add_argument("--merge", metavar="FICHIER",
+                    help="cumuler dans ce fichier plutôt que d'écrire un rapport isolé. "
+                         "Trois cents livres feraient trois cents rapports que personne "
+                         "ne lira ; un seul classement, nourri par tous, se relit.")
     args = ap.parse_args()
 
     d = pathlib.Path(args.directory)
