@@ -474,3 +474,25 @@ def test_reference_thresholds_separate_the_measured_recordings():
     assert bounds.min_chars_per_second > 10.4
     assert bounds.min_chars_per_second < 15.9
     assert bounds.max_chars_per_second > 19.0
+
+
+def test_a_lone_title_is_not_a_runaway():
+    """Un mot seul met une seconde, quelle que soit sa longueur.
+
+    Mesuré : « Dedicace » et « EPILOGUE », titres isolés en début de chapitre,
+    revenaient à 6 caractères par seconde et étaient déclarés emballés. Les
+    réparations échouaient ensuite, faute de défaut à réparer.
+    """
+    report = quality.inspect_segment(with_edges(speech(1.44)), SR, "Dédicace")
+    assert "runaway" not in report.codes
+
+
+def test_a_short_text_is_still_judged_on_duration():
+    """Borner la règle du débit ne doit pas ouvrir un trou.
+
+    « Dédicace » en vingt secondes est aussi cassé que la même chose sur un
+    paragraphe : sous le seuil de longueur, c'est la durée seule qui juge.
+    """
+    report = quality.inspect_segment(with_edges(speech(20.0)), SR, "Dédicace")
+    assert "runaway" in report.codes
+    assert report.fatal

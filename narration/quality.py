@@ -112,6 +112,12 @@ class QualityThresholds:
     #: Mesuré : deux « défauts » sur trois d'un livre étaient des titres, et
     #: leurs réparations échouaient parce qu'il n'y avait rien à réparer.
     min_chars_for_rate: int = 25
+    #: Pour un texte trop court pour que le débit signifie quelque chose, c'est
+    #: la durée seule qui juge : un mot met une seconde, jamais dix. Sans cette
+    #: borne, borner la règle du débit laisserait passer un vrai emballement
+    #: sur un titre — « Dédicace » en vingt secondes est aussi cassé que la
+    #: même chose sur un paragraphe.
+    max_short_segment_sec: float = 4.0
     #: Segments shorter than this are treated as a failed generation outright.
     min_duration_sec: float = 0.2
     #: A segment whose peak sits below this carries no speech at all.
@@ -383,6 +389,9 @@ def inspect_segment(
         elif (
             rate < thresholds.runaway_chars_per_second
             and characters >= thresholds.min_chars_for_rate
+        ) or (
+            characters < thresholds.min_chars_for_rate
+            and duration > thresholds.max_short_segment_sec
         ):
             expected = characters / thresholds.expected_chars_per_second
             issues.append(
