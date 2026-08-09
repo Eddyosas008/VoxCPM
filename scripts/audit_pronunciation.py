@@ -202,6 +202,9 @@ def main() -> int:
     ap.add_argument("--min", type=int, default=2,
                     help="occurrences minimales pour figurer au rapport (défaut : 2)")
     ap.add_argument("--json", help="écrire le rapport ici")
+    ap.add_argument("--match", type=float, default=0.6, metavar="TAUX",
+                    help="part minimale des mots retrouvés pour qu'un segment compte "
+                         "(défaut : 0.6). En deçà, la prise est ratée et non mal dite.")
     ap.add_argument("--merge", metavar="FICHIER",
                     help="cumuler dans ce fichier plutôt que d'écrire un rapport isolé. "
                          "Trois cents livres feraient trois cents rapports que personne "
@@ -239,10 +242,23 @@ def main() -> int:
 
     suspects: collections.Counter = collections.Counter()
     exemples: dict[str, str] = {}
+    ecartes = 0
     for source, entendu in transcrire(echantillon, args.device):
-        for mot, contexte in comparer(source, entendu):
+        manquants = comparer(source, entendu)
+        # Un segment dont la transcription s'écarte massivement n'est pas mal
+        # prononcé : il est raté, et le contrôle qualité s'en occupe. Le compter
+        # ici ferait remonter tous ses mots — « l'enfant », « parent »,
+        # « anxiété » — et noierait les vraies trouvailles comme « Filliozat ».
+        total = len(mots(source)) or 1
+        if len(manquants) / total > 1 - args.match:
+            ecartes += 1
+            continue
+        for mot, contexte in manquants:
             suspects[mot] += 1
             exemples.setdefault(mot, contexte[:110])
+    if ecartes:
+        print(f"\n{ecartes} segment(s) écarté(s) : transcription trop éloignée "
+              f"pour juger d'une prononciation")
 
     retenus = [(m, n) for m, n in suspects.most_common() if n >= args.min]
     print(f"\n{len(suspects)} mot(s) non retrouvé(s), {len(retenus)} vu(s) au moins {args.min} fois\n")
