@@ -171,6 +171,19 @@ class TextNormalizer:
         # 去除 Markdown 语法，去除表情符号，去除换行符
         lang = "zh" if contains_chinese(text) else "en"
         text = clean_text(text)
+
+        # clean_text can empty the string outright — a fragment of markup, a
+        # stray symbol, a line that was only punctuation. wetext then refuses
+        # it with `assert len(input) > 0`, and the assertion kills the whole
+        # run: three books died this way, at 41, 69 and 98 minutes in, each
+        # after everything expensive had already succeeded.
+        #
+        # Chasing the characters that trigger it one by one was losing race:
+        # the superscript "5ᵉ" was only the first. Nothing downstream needs
+        # this call to have happened, and the empty segment is caught by the
+        # quality pass, so hand the empty string back instead of raising.
+        if not text.strip():
+            return text
         if lang == "zh":
             text = text.replace(
                 "=", "等于"
