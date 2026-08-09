@@ -89,6 +89,10 @@ def main() -> int:
     ap.add_argument("--qc-retries", default="2")
     ap.add_argument("--only", type=int, help="ne traiter que les N premiers")
     ap.add_argument("--skip-repair", action="store_true")
+    ap.add_argument("--audit", type=int, metavar="N", default=0,
+                    help="relire N segments par livre avec la reconnaissance vocale et "
+                         "cumuler les mots suspects dans queue/prononciation_a_valider.json "
+                         "(0 = ne pas auditer)")
     ap.add_argument("--no-synthetic-disclosure", action="store_true",
                     help="Retirer la mention « voix de synthèse » de tous les génériques")
     ap.add_argument("--keep", choices=("all", "deliverables"), default="all",
@@ -209,6 +213,15 @@ def main() -> int:
                         f"(la nouvelle prise était pire)")
                 elif rc != 0:
                     log(f"    réparation incomplète (code {rc})")
+
+        # L'audit doit passer AVANT le balayage : il lit le cache de segments,
+        # que --keep deliverables efface. Il cumule dans un classement unique —
+        # trois cents rapports isolés ne seraient jamais relus, un seul l'est.
+        if args.audit:
+            log(f"    audit de prononciation ({args.audit} segments)")
+            run([PYTHON, "scripts/audit_pronunciation.py", str(outdir),
+                 "--sample", str(args.audit), "--device", args.device,
+                 "--merge", str(qpath.parent / "prononciation_a_valider.json")], blog)
 
         wavs = len(list(outdir.glob("*.wav"))) if outdir.is_dir() else 0
 

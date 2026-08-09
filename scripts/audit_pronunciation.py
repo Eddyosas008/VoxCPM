@@ -251,6 +251,27 @@ def main() -> int:
                        ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"\nrapport : {args.json}")
 
+    if args.merge:
+        cumul_path = pathlib.Path(args.merge)
+        try:
+            cumul = json.loads(cumul_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cumul = {}
+        for mot, n in suspects.items():
+            entree = cumul.setdefault(mot, {"occurrences": 0, "livres": [], "entendu": ""})
+            entree["occurrences"] += n
+            if d.name not in entree["livres"]:
+                entree["livres"].append(d.name)
+            entree["entendu"] = entree["entendu"] or exemples.get(mot, "")[:110]
+        # Trié par fréquence : un mot vu dans huit livres se corrige avant un
+        # mot vu une fois, à temps d'écoute égal.
+        ordonne = dict(sorted(cumul.items(), key=lambda kv: -kv[1]["occurrences"]))
+        cumul_path.parent.mkdir(parents=True, exist_ok=True)
+        cumul_path.write_text(json.dumps(ordonne, ensure_ascii=False, indent=2), encoding="utf-8")
+        recurrents = [m for m, v in ordonne.items() if len(v["livres"]) >= 2]
+        print(f"\ncumul : {len(ordonne)} mot(s), dont {len(recurrents)} vu(s) dans "
+              f"plusieurs livres — {cumul_path}")
+
     print("\nRien n'est corrigé ici. Les candidats passent par try_pronunciation.py,")
     print("et seul ce qui a été entendu entre dans le lexique.")
     return 0
