@@ -151,22 +151,33 @@ cents mille milles million millions milliard milliards demi premier première
 
 
 def interessant(mot: str) -> bool:
-    """Un mot dont une divergence dit quelque chose.
+    """Un mot dont une divergence dit vraiment quelque chose.
 
-    Un nom propre, un sigle, un mot étranger n'ont pas de filet grammatical :
-    si la transcription s'en écarte, c'est que la prononciation s'en écartait.
+    Restreint aux noms propres et aux sigles, et c'est délibéré. Whisper ne
+    transcrit pas mot à mot : il paraphrase, supprime une hésitation, reformule
+    une tournure. Un mot courant absent de la transcription ne prouve donc rien,
+    et l'expérience le confirme — 264 mots signalés sur trois livres, aucun
+    revu d'un livre à l'autre, c'est-à-dire que du bruit.
+
+    Un nom propre et un sigle n'ont pas ce filet : la reconnaissance vocale
+    n'invente pas « Filiozat » pour « Filliozat » si elle a entendu le nom
+    correctement. Là, la divergence est le signal.
     """
     plat = pliable(mot)
     if not plat or len(plat) < 3:
         return False
-    if plat in GRAMMATICAUX:
+    if plat in GRAMMATICAUX or plat in NOMBRES:
         return False
-    # « quatre-vingt-dix » est un nombre autant que « dix » : tester chaque
-    # partie, sinon les composés passent le filtre et polluent le rapport.
     parties = [pliable(p) for p in re.split(r"[-']", mot) if p]
     if parties and all(p in NOMBRES or p in GRAMMATICAUX for p in parties):
         return False
-    return plat not in NOMBRES
+    # Un sigle : au moins deux capitales d'affilée.
+    if re.match(r"^[A-ZÀ-Þ]{2,}$", mot):
+        return True
+    # Un nom propre : capitale initiale, minuscules ensuite. Une majuscule de
+    # début de phrase passe aussi, et c'est acceptable — le bruit qu'elle
+    # ajoute est borné, là où les mots courants sont sans fin.
+    return bool(re.match(r"^[A-ZÀ-Þ][a-zà-ÿ]", mot))
 
 
 def comparer(source: str, entendu: str) -> list[tuple[str, str]]:
