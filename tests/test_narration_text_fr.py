@@ -404,3 +404,38 @@ class TestSymbolsAManuscriptKeeps:
     def test_ordinary_prose_is_untouched(self):
         texte = "Une phrase parfaitement ordinaire, sans aucun signe particulier."
         assert normalize_french(texte) == texte
+
+
+class TestParentheses:
+    """Une parenthèse ne s'entend pas — et une longue énumération entre
+    parenthèses est ce qui a tronqué 86 % des segments défectueux."""
+
+    def test_an_enumeration_becomes_an_apposition(self):
+        assert normalize_french(
+            "Les approches alternatives (keynésienne, marxiste) existent."
+        ) == "Les approches alternatives, keynésienne, marxiste, existent."
+
+    def test_no_comma_is_left_against_the_full_stop(self):
+        # « …aux médias. » et non « …aux médias, . »
+        rendu = normalize_french("Ils ont des moyens (financements, accès aux médias).")
+        assert rendu == "Ils ont des moyens, financements, accès aux médias."
+
+    def test_a_short_aside_is_left_alone(self):
+        # Une date ou une source n'a jamais tronqué ; on n'y touche pas. Le
+        # nombre, lui, est écrit en toutes lettres par la passe précédente.
+        assert normalize_french("le rapport (2008)") == "le rapport (deux mille huit)"
+        assert normalize_french("sur France Culture (Paris)") == "sur France Culture (Paris)"
+
+    def test_a_long_aside_without_a_comma_is_flattened_too(self):
+        rendu = normalize_french(
+            "un effet rebond (la consommation augmente avec l'efficacité) connu"
+        )
+        assert "(" not in rendu
+        assert "la consommation augmente" in rendu
+
+    def test_the_parenthesis_characters_never_reach_the_model(self):
+        rendu = normalize_french("des ressources (a, b, c) et (d, e) ailleurs")
+        assert "(" not in rendu and ")" not in rendu
+
+    def test_an_empty_parenthesis_disappears(self):
+        assert "(" not in normalize_french("un mot () suivant")

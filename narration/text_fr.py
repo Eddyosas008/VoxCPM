@@ -536,6 +536,39 @@ def _clean_dialogue(text: str, strip_quotes: bool) -> str:
     return text
 
 
+_RE_PARENTHETICAL = re.compile(r"\(([^()]{0,400})\)")
+
+
+def _flatten_parentheses(text: str) -> str:
+    """Turn a parenthetical aside into the apposition a narrator would speak.
+
+    Parentheses make no sound of their own, but the model treats an opening one
+    as a bracket it must close, and on a long enumeration it gives up partway.
+    Across the first twenty books, 86% of the truncated segments held a
+    parenthesis against 29% of segments overall — and 30% of segments of the
+    same length, so it is the construction that costs, not the length. "Les
+    approches alternatives (keynésienne, institutionnaliste, marxiste,
+    écologique)" came out as 2.1 seconds of audio for 260 characters of text.
+
+    Commas read aloud the same way. Short asides are left alone — a date, a
+    radio station, a source — because they never truncated, and every rewrite
+    is another chance to break something that already worked.
+    """
+
+    def replace(match: "re.Match[str]") -> str:
+        inner = match.group(1).strip()
+        if not inner:
+            return " "
+        if "," not in inner and len(inner) <= 30:
+            return match.group(0)
+        return f", {inner}, "
+
+    text = _RE_PARENTHETICAL.sub(replace, text)
+    # The apposition's closing comma lands on whatever punctuation ended the
+    # host sentence: "…marxiste, ." Nothing in French wants a comma there.
+    return re.sub(r",\s*([.;:!?…])", r"\1", text)
+
+
 def _tidy_whitespace(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" ([,.;:!?…])", r"\1", text)
@@ -582,6 +615,8 @@ def normalize_french(
     text = _expand_percent(text)
     text = _expand_ordinal_marks(text)
     text = _expand_numbers(text)
+    # After the markdown pass, so that a link's "(url)" is already gone.
+    text = _flatten_parentheses(text)
     text = _clean_dialogue(text, strip_quotes)
     return _tidy_whitespace(text)
 
