@@ -213,6 +213,14 @@ _ABBREVIATIONS: tuple[tuple[str, str], ...] = (
     (r"\bp\.(?=\s*\d)", "page"),
     (r"\bn[°º]\s*(?=\d)", "numéro "),
     (r"[°º](?=\s|$)", " degrés"),
+    # « 20 h » est déjà lu par la règle des heures, « 5 min » ne l'était par
+    # personne : 106 fois dans les vingt et un livres, dit « min ». Le singulier
+    # s'écrit ici en toutes lettres — « 1 minute » serait rendu « un minute »
+    # par la passe des nombres, qui ne connaît pas le genre du mot qui suit.
+    # (Le défaut subsiste au-delà de un : « 51 min », une fois dans le
+    # catalogue, se dit « cinquante et un minutes ».)
+    (r"\b1\s*min\b(?!ute)", "une minute"),
+    (r"(?<=\d)\s*min\b(?!ute)", " minutes"),
 )
 
 
@@ -268,6 +276,100 @@ def _spell_decimal(whole: str, frac: str) -> str:
 # --------------------------------------------------------------------------
 
 
+#: Le blanc d'un formulaire : un trait à remplir au stylo.
+_BLANK = re.compile(r"_{2,}")
+
+#: Ce qu'on efface après le blanc s'arrête à la ponctuation forte : au-delà,
+#: ce n'est plus l'unité qui accompagnait le trait, c'est la phrase suivante.
+_BLANK_TAIL = re.compile(r"_{2,}[^(.!?;\n]*")
+
+#: Un blanc long est un trait de formulaire ; une queue longue est de la prose
+#: qui se trouvait derrière. Sur les trois livres concernés, la plus longue
+#: queue légitime fait 28 caractères (« ___ fois par jour en moyenne »).
+_MAX_TAIL = 40
+
+#: Séparateurs qu'un champ vidé laisse pendre à ses extrémités.
+_ORPHAN_EDGE = re.compile(r"^[\s:;,+/–—-]+|[\s:;,+/–—-]+$")
+
+
+def _form_fields(line: str) -> list[str]:
+    """Découper une ligne de formulaire sur ses barres obliques de premier rang.
+
+    Une parenthèse en protège une : « Temps réel mesuré (Screen Time /
+    Bien-être numérique) » est un seul champ, pas deux.
+    """
+    fields: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in line:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch == "/" and depth == 0:
+            fields.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    fields.append("".join(current))
+    return fields
+
+
+def _strip_form_blanks(text: str) -> str:
+    """Rendre lisible une ligne à remplir, ou la faire taire.
+
+    Effacer le seul trait ne suffisait pas, et c'est ce qui a été livré :
+    « Jour 5: ___ minutes (objectif: 10 min) / Ressenti: ___ » devenait
+    « Jour 5 : minutes (objectif : 10 min) / Ressenti : », que le moteur a
+    narré tel quel — l'audit l'a relu en « Jour 5, minute objectif, 10 mines,
+    essenci », sept fois de suite, dans un livre déjà livré.
+
+    Ce qui reste après le trait n'a de sens qu'avec lui : « ___ heures ___
+    minutes » énonce des unités sans grandeur, « ___ h / ___ h / ___ h » trois
+    fois rien. On efface donc le trait **et sa queue**, jusqu'à la parenthèse
+    ou la barre oblique suivante — la parenthèse porte souvent la seule vraie
+    information de la ligne (« objectif : 10 min ») et doit survivre.
+
+    L'intitulé, lui, reste toujours : c'est une consigne que l'auditeur peut
+    suivre. « Application la plus consultée : ______ » devient « Application la
+    plus consultée. » Une ligne qui n'était qu'un trait disparaît, faute
+    d'avoir jamais rien dit.
+
+    Trois livres de la file portaient ces lignes — 68, 11 et 8 — et aucun
+    n'aurait dû les faire entendre.
+    """
+    if "__" not in text:
+        return text
+
+    def deblank(field: str) -> str:
+        def cut(m: re.Match) -> str:
+            # Une queue trop longue n'est pas une unité, c'est une phrase :
+            # on se contente alors d'ôter le trait, sans l'emporter avec lui.
+            if len(m.group(0)) <= _MAX_TAIL:
+                return ""
+            return _BLANK.sub(" ", m.group(0))
+
+        return _BLANK_TAIL.sub(cut, field)
+
+    def rewrite(line: str) -> str:
+        if not _BLANK.search(line):
+            return line
+        kept = []
+        for field in _form_fields(line):
+            field = _ORPHAN_EDGE.sub("", deblank(field)).strip()
+            # « Jour 5 : (objectif : 10 min) » — le deux-points a perdu sa
+            # valeur, la parenthèse la porte désormais seule.
+            field = re.sub(r"\s*:\s*(?=\()", " ", field)
+            if re.search(r"[^\W\d_]|\d", field):
+                kept.append(field)
+        if not kept:
+            return ""
+        rebuilt = ". ".join(kept)
+        return rebuilt if rebuilt[-1] in ".!?…:;" else rebuilt + "."
+
+    return "\n".join(rewrite(line) for line in text.split("\n"))
+
+
 def _clean_symbols(text: str) -> str:
     """Traduire en mots les signes qu'un manuscrit garde et qu'on ne dit pas.
 
@@ -292,6 +394,22 @@ ewpage`` perdait sa barre oblique au nettoyage markdown et
     text = re.sub(r"\s*°\s*F(?![a-zà-ÿ])", " degrés Fahrenheit", text)
     text = re.sub(r"(\d)\s*°", r"\1 degrés", text)
 
+    # Un intervalle chiffré. Le trait d'union se dit « à », et ne pas le dire
+    # ne laisse pas un silence : il colle les deux nombres l'un à l'autre et la
+    # passe des nombres les fond en un seul. « La pandémie de 2020-2022 » se
+    # narrait « deux mille vingt-deux mille vingt-deux ». 726 intervalles dans
+    # les vingt et un livres de la file.
+    #
+    # Les bornes acceptent un horaire (« 14h-15h30 »), et les deux gardes
+    # interdisent qu'une chaîne plus longue soit prise pour un intervalle :
+    # « 4-7-8 » est une respiration, pas « quatre à sept à huit », et
+    # « 5-4-3-2-1 » un exercice d'ancrage.
+    text = re.sub(
+        r"(?<![\d\-–])(\d{1,4}(?:h\d{0,2})?)\s*[-–]\s*(\d{1,4}(?:h\d{0,2})?)(?![\d\-–])",
+        r"\1 à \2",
+        text,
+    )
+
     # Signes mathématiques au fil d'une phrase.
     text = re.sub(r"\s*×\s*", " fois ", text)
     text = re.sub(r"(?<=[\w)])\s*=\s*(?=[\w(])", " égale ", text)
@@ -311,7 +429,7 @@ ewpage`` perdait sa barre oblique au nettoyage markdown et
     )
 
     # Restes de formulaire : lignes à remplir, cases à cocher, appels de note.
-    text = re.sub(r"_{2,}", " ", text)
+    text = _strip_form_blanks(text)
     text = re.sub(r"[☐☑✓✗▢]", " ", text)
     text = re.sub(r"(?<=[a-zà-ÿ])\*(?=[\s,.;:)])", "", text)
 

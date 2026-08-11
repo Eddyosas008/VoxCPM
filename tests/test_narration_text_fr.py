@@ -439,3 +439,104 @@ class TestParentheses:
 
     def test_an_empty_parenthesis_disappears(self):
         assert "(" not in normalize_french("un mot () suivant")
+
+
+class TestFormBlanks:
+    """Une ligne à remplir se lit des yeux et ne se dit pas.
+
+    Effacer le seul trait laissait un résidu que le moteur a narré tel quel :
+    « Jour 5 : minutes (objectif : 10 min) / Ressenti : ». L'audit l'a relu en
+    « Jour 5, minute objectif, 10 mines, essenci » — sept fois de suite, dans
+    un livre déjà livré.
+    """
+
+    def test_the_label_survives_its_blank(self):
+        assert normalize_french(
+            "Application la plus consultée : ___________________________"
+        ) == "Application la plus consultée."
+
+    def test_orphaned_units_go_with_the_blank(self):
+        # « heures » et « minutes » n'énoncent plus rien sans leur grandeur.
+        assert normalize_french(
+            "Estimation de mon temps d'écran : ____ heures ____ minutes"
+        ) == "Estimation de mon temps d'écran."
+
+    def test_a_line_that_was_only_a_rule_disappears(self):
+        assert normalize_french("____________________________").strip() == ""
+
+    def test_the_parenthesis_holds_the_only_real_content(self):
+        # C'est le programme du livre : il doit survivre au nettoyage.
+        assert normalize_french(
+            "Jour 5: ___ minutes (objectif: 10 min) / Ressenti: ___"
+        ) == "Jour cinq (objectif: dix minutes). Ressenti."
+
+    def test_repeated_fields_collapse_instead_of_leaving_slashes(self):
+        assert normalize_french(
+            "Mes trois créneaux quotidiens: ___ h / ___ h / ___ h"
+        ) == "Mes trois créneaux quotidiens."
+
+    def test_a_slash_inside_a_parenthesis_is_not_a_field_separator(self):
+        # L'incise est ensuite aplatie par la passe des parenthèses ; ce que
+        # ce test protège, c'est qu'elle soit restée d'un seul tenant.
+        assert normalize_french(
+            "Temps réel mesuré (Screen Time / Bien-être numérique) : ____ heures"
+        ) == "Temps réel mesuré, Screen Time / Bien-être numérique."
+
+    def test_prose_behind_a_blank_is_not_eaten(self):
+        # Le garde-fou : au-delà d'une queue courte, ce n'est plus une unité,
+        # c'est la phrase — on ôte le trait et on lui laisse ses mots.
+        assert normalize_french(
+            "Elle note ___ dans la marge puis referme le carnet et sort."
+        ) == "Elle note dans la marge puis referme le carnet et sort."
+
+    def test_a_line_without_a_blank_keeps_its_slashes(self):
+        assert normalize_french(
+            "Il gagne trois mille euros / mois."
+        ) == "Il gagne trois mille euros / mois."
+
+
+class TestMinutesAbbreviation:
+    """« 20 h » était lu, « 5 min » ne l'était par personne : 106 fois dans les
+    vingt et un livres de la file, dit « min »."""
+
+    def test_minutes_are_spoken(self):
+        assert normalize_french("une séance de 5 min") == "une séance de cinq minutes"
+
+    def test_one_minute_stays_singular(self):
+        assert normalize_french("après 1 min") == "après une minute"
+
+    def test_an_already_spelled_minute_is_left_alone(self):
+        assert normalize_french("après 5 minutes") == "après cinq minutes"
+
+    def test_a_word_beginning_with_min_is_untouched(self):
+        assert normalize_french("le minimum de 3 minutes") == "le minimum de trois minutes"
+
+
+class TestNumericRanges:
+    """Un trait d'union entre deux nombres se dit « à ».
+
+    Ne pas le dire ne laisse pas un silence : il colle les deux nombres et la
+    passe des nombres les fond en un seul. « La pandémie de 2020-2022 » se
+    narrait « deux mille vingt-deux mille vingt-deux ». 726 intervalles dans
+    les vingt et un livres de la file.
+    """
+
+    def test_a_year_range_is_two_years(self):
+        assert normalize_french("la pandémie de 2020-2022") == (
+            "la pandémie de deux mille vingt à deux mille vingt-deux"
+        )
+
+    def test_a_quantity_range(self):
+        assert normalize_french("dormir 7-8 heures") == "dormir sept à huit heures"
+
+    def test_an_hour_range_keeps_its_minutes(self):
+        assert normalize_french("de 14h-15h30") == "de quatorze heures à quinze heures trente"
+
+    def test_a_breathing_exercise_is_not_a_range(self):
+        # « 4-7-8 » est une respiration, « 5-4-3-2-1 » un exercice d'ancrage :
+        # trois nombres à dire l'un après l'autre, pas un intervalle.
+        assert "à" not in normalize_french("la respiration 4-7-8")
+        assert "à" not in normalize_french("exercice 5-4-3-2-1")
+
+    def test_a_hyphenated_name_with_a_number_is_untouched(self):
+        assert normalize_french("le COVID-19") == "le COVID-dix-neuf"
