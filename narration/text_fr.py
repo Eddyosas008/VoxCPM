@@ -668,23 +668,30 @@ def _flatten_parentheses(text: str) -> str:
     approches alternatives (keynésienne, institutionnaliste, marxiste,
     écologique)" came out as 2.1 seconds of audio for 260 characters of text.
 
-    Commas read aloud the same way. Short asides are left alone — a date, a
-    radio station, a source — because they never truncated, and every rewrite
-    is another chance to break something that already worked.
+    Commas read aloud the same way. Short asides used to be left alone — a
+    date, a source — on the grounds that they had never truncated. Measured
+    again on a book narrated *with* this pass in place, that exemption is what
+    was left of the defect: of sixty-nine segments transcribed back, the eight
+    that stopped early all carried a parenthesis, and all eight carried one the
+    exemption had spared — « (REM) », « (N3) », « (chapitre dix) »,
+    « (urgences pédiatriques) ». Not one of the fifty-one segments without a
+    parenthesis stopped early. Length was never the trigger; the bracket was.
     """
 
     def replace(match: "re.Match[str]") -> str:
         inner = match.group(1).strip()
         if not inner:
             return " "
-        if "," not in inner and len(inner) <= 30:
-            return match.group(0)
         return f", {inner}, "
 
     text = _RE_PARENTHETICAL.sub(replace, text)
     # The apposition's closing comma lands on whatever punctuation ended the
     # host sentence: "…marxiste, ." Nothing in French wants a comma there.
-    return re.sub(r",\s*([.;:!?…])", r"\1", text)
+    text = re.sub(r",\s*([.;:!?…])", r"\1", text)
+    # An aside that ended the line has nothing to lean its comma against —
+    # "le rapport, deux mille huit," — and a trailing comma is exactly the
+    # unclosed construction this pass exists to remove.
+    return re.sub(r"(?m),[ \t]*$", "", text)
 
 
 def _tidy_whitespace(text: str) -> str:

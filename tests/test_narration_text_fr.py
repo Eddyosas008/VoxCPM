@@ -420,11 +420,21 @@ class TestParentheses:
         rendu = normalize_french("Ils ont des moyens (financements, accès aux médias).")
         assert rendu == "Ils ont des moyens, financements, accès aux médias."
 
-    def test_a_short_aside_is_left_alone(self):
-        # Une date ou une source n'a jamais tronqué ; on n'y touche pas. Le
-        # nombre, lui, est écrit en toutes lettres par la passe précédente.
-        assert normalize_french("le rapport (2008)") == "le rapport (deux mille huit)"
-        assert normalize_french("sur France Culture (Paris)") == "sur France Culture (Paris)"
+    def test_a_short_aside_is_flattened_too(self):
+        # L'exemption des incises courtes a été mesurée fausse : sur un livre
+        # narré avec l'aplatissement en place, les huit segments tronqués
+        # portaient tous une parenthèse, et tous une parenthèse courte.
+        assert normalize_french("le rapport (2008)") == "le rapport, deux mille huit"
+        assert normalize_french("sur France Culture (Paris)") == "sur France Culture, Paris"
+
+    def test_the_sigla_that_truncated_a_chapter(self):
+        # Mesuré : 236 caractères sortis en 6,9 s, la transcription s'arrêtant
+        # à « Le sommeil paradoxal » — 22 % du texte.
+        rendu = normalize_french(
+            "Le sommeil paradoxal (REM) représente cinquante pour cent du temps."
+        )
+        assert "(" not in rendu
+        assert rendu == "Le sommeil paradoxal, REM, représente cinquante pour cent du temps."
 
     def test_a_long_aside_without_a_comma_is_flattened_too(self):
         rendu = normalize_french(
@@ -468,7 +478,7 @@ class TestFormBlanks:
         # C'est le programme du livre : il doit survivre au nettoyage.
         assert normalize_french(
             "Jour 5: ___ minutes (objectif: 10 min) / Ressenti: ___"
-        ) == "Jour cinq (objectif: dix minutes). Ressenti."
+        ) == "Jour cinq, objectif: dix minutes. Ressenti."
 
     def test_repeated_fields_collapse_instead_of_leaving_slashes(self):
         assert normalize_french(
