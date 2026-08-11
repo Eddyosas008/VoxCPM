@@ -142,6 +142,27 @@ def main() -> int:
 
         log(f"[{i}/{len(books)}] {slug} — {b['chars']} car., voix « {b['voice']} »")
 
+        # Une reprise écrit par-dessus la production précédente, mais seulement
+        # là où les noms coïncident : un chapitre renommé, un découpage qui
+        # bouge d'un fichier, et l'ancien reste. « Le Pouvoir Silencieux » est
+        # ressorti avec vingt-huit fichiers ACX pour vingt chapitres — sept
+        # rescapés du 8 août, portant des titres à peine différents. Le M4B
+        # était sain ; le jeu qu'on livre à une plateforme ne l'était pas.
+        #
+        # On efface donc les livrables de la prise précédente — et eux seuls.
+        # `.cache` reste : c'est lui qui permet à une narration interrompue de
+        # reprendre où elle en était plutôt que de recommencer trois heures.
+        if outdir.exists():
+            efface = 0
+            for item in outdir.iterdir():
+                if item.name == ".cache":
+                    continue
+                efface += (item.stat().st_size if item.is_file()
+                           else sum(f.stat().st_size for f in item.rglob("*") if f.is_file()))
+                shutil.rmtree(item) if item.is_dir() else item.unlink()
+            if efface:
+                log(f"    livrables précédents effacés ({efface / 1e9:.1f} Go), cache conservé")
+
         # Pré-vol : il ne charge pas le modèle, donc il coûte des secondes et
         # attrape ce qui ferait échouer trois heures plus tard.
         rc, out = run([PYTHON, "scripts/narrate_book.py", str(txt), "--voice", b["voice"],
