@@ -33,6 +33,9 @@ import sys
 from dataclasses import dataclass, field
 from typing import List
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from narration import adresse_audio  # noqa: E402  (après l'ajout au chemin)
+
 # A heading that opens something a narrator actually reads. Anything before the
 # first of these is front matter: title page, copyright, ISBN, contents.
 CONTENT_HEADING = re.compile(
@@ -310,6 +313,11 @@ def main() -> int:
     ap.add_argument("manuscript", help="fichier Markdown")
     ap.add_argument("-o", "--output", help="fichier .txt de sortie (défaut : à côté du manuscrit)")
     ap.add_argument("--report", action="store_true", help="détailler ce qui a été retiré")
+    ap.add_argument("--no-adresse-audio", action="store_true",
+                    help="ne pas adapter « lire ce livre » en « écouter ce livre audio »")
+    ap.add_argument("--rapport-adresse", metavar="FICHIER",
+                    help="écrire le détail de l'adaptation à l'écoute, et les "
+                         "passages laissés à décider à la main")
     args = ap.parse_args()
 
     src = pathlib.Path(args.manuscript)
@@ -330,6 +338,23 @@ def main() -> int:
         print("aucun texte narrable trouvé", file=sys.stderr)
         return 1
 
+    # Le manuscrit s'adresse à un lecteur ; l'audio s'adresse à un auditeur.
+    # L'adaptation vient en dernier, sur le texte déjà nettoyé : elle raisonne
+    # sur des phrases, et les phrases n'existent qu'une fois les blocs de mise
+    # en forme retirés.
+    adaptations, signalements = [], []
+    if not args.no_adresse_audio:
+        adaptes = []
+        # Le nom du dossier identifie le livre : un livre dont le sujet est la
+        # différence entre lire et écouter échappe à la règle sur « lecteur ».
+        slug = src.parent.name
+        for c in chapters:
+            neuf, ch, sig = adresse_audio.adapter(c, slug=slug)
+            adaptes.append(neuf)
+            adaptations.extend(ch)
+            signalements.extend(sig)
+        chapters = adaptes
+
     out = pathlib.Path(args.output) if args.output else src.with_suffix(".narration.txt")
     body = "\n\n---\n\n".join(chapters)
     # The separator must be unambiguous: it is the one thing narrate_book.py
@@ -341,6 +366,15 @@ def main() -> int:
     print(f"{len(chapters)} chapitre(s) · {chars} caractères · ~{chars/15/60:.0f} min → {out.name}")
     for i, c in enumerate(chapters, 1):
         print(f"  {i:>3}. {c.splitlines()[0][:62]:<62} {len(c):>7} car.")
+
+    if adaptations or signalements:
+        print(f"\nAdressé à l'auditeur : {len(adaptations)} adaptation(s), "
+              f"{len(signalements)} passage(s) à décider à la main")
+        for c in adaptations:
+            print(f"  [{c.regle}] {c.avant} → {c.apres}")
+    if args.rapport_adresse:
+        pathlib.Path(args.rapport_adresse).write_text(
+            adresse_audio.rapport_texte(adaptations, signalements), encoding="utf-8")
 
     counts: dict[str, int] = {}
     for r in removed_parse:
