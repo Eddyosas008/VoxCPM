@@ -303,6 +303,28 @@ class TestContextualLexicon:
     def test_case_does_not_matter(self):
         assert "èsste" in normalize_french("À L'EST, la mer.", lexicon=self.EAST)
 
+    def test_the_capital_of_a_sentence_start_is_kept(self):
+        """« Ce » en tête de phrase doit devenir « Çe », pas « ce » ni « Ce ».
+
+        C'est le cas le plus lourd du lexique et rien ne le testait. Mesuré sur
+        dix phrases réelles du corpus, voix Alex Somerset, relues par Whisper :
+        « Ce » brut est mal dit **10 fois sur 10** — le moteur épelle les
+        lettres, l'ASR écrit « Point C E » ou « Ces E- ». Avec la cédille,
+        10/10 sont justes, et 0 des 27 segments de production contenant « Çe »
+        n'était fautif. La correction ne vaut donc que si elle survit à la
+        majuscule : une substitution qui rendrait « ce » en minuscule, ou qui
+        laisserait « Ce » intact, ramène un défaut audible toutes les deux
+        minutes — 2 989 des 12 498 « ce » du corpus ouvrent une phrase.
+        """
+        assert normalize_french("Ce livre.", lexicon={"ce": "çe"}) == "Çe livre."
+
+    def test_the_capital_is_kept_after_a_full_stop_too(self):
+        out = normalize_french("Voici ce livre. Ce chapitre parle.", lexicon={"ce": "çe"})
+        assert out == "Voici çe livre. Çe chapitre parle."
+
+    def test_a_capital_is_not_invented_where_there_was_none(self):
+        assert normalize_french("dans ce livre", lexicon={"ce": "çe"}) == "dans çe livre"
+
     def test_a_malformed_entry_is_ignored_not_fatal(self):
         lexicon = {"est": {"pas_la_bonne_clef": "x"}, "SNCF": "S N C F"}
         out = normalize_french("La SNCF est là.", lexicon=lexicon)
