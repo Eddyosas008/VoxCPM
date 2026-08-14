@@ -17,6 +17,8 @@ POD="root@194.26.196.166"
 PORT=41114
 DIST="/workspace/voxcpm/output"
 LOCAL="${1:-/c/Users/PaxHelios/voxcpm-livres}"
+# Où atterrit la prise précédente quand une nouvelle la remplace.
+ARCHIVE="$LOCAL/avant_correctif"
 
 ssh_pod() { ssh -n -o BatchMode=yes -o ConnectTimeout=15 -p "$PORT" "$POD" "$@"; }
 
@@ -40,6 +42,19 @@ for b in $livres; do
   # ses propres en-têtes de section, d'où un décompte faux d'une unité.
   n_acx_dist=$(ssh_pod "ls $DIST/$b/acx | wc -l")
   o_m4b_dist=$(ssh_pod "stat -c%s $DIST/$b/*.m4b")
+
+  # Une narration qui en remplace une autre ne doit pas l'effacer. La version
+  # précédente descend d'un cran, numérotée, et reste écoutable : c'est le seul
+  # moyen de juger un correctif — on compare deux prises du même chapitre, pas
+  # un souvenir et un fichier. Le scp d'après écrase sinon sans rien demander.
+  if [ -f "$LOCAL/${b}_complet.m4b" ]; then
+    mkdir -p "$ARCHIVE/acx"
+    n=1
+    while [ -e "$ARCHIVE/${b}_complet_v${n}.m4b" ]; do n=$((n + 1)); done
+    mv "$LOCAL/${b}_complet.m4b" "$ARCHIVE/${b}_complet_v${n}.m4b"
+    [ -d "$LOCAL/acx/$b" ] && mv "$LOCAL/acx/$b" "$ARCHIVE/acx/${b}_v${n}"
+    echo "   version précédente conservée : $(basename "$ARCHIVE")/${b}_complet_v${n}.m4b"
+  fi
 
   mkdir -p "$LOCAL/acx/$b"
   scp -q -P "$PORT" "$POD:$DIST/$b/*.m4b" "$LOCAL/" 2>/dev/null
