@@ -62,7 +62,7 @@ cd /workspace/voxcpm
 setsid nohup env LANG=C.UTF-8 LC_ALL=C.UTF-8 \
   ./.venv/bin/python \
   scripts/narrate_queue.py \
-  queue/queue_46.json \
+  queue/queue_catalogue.json \
   --device cuda --keep deliverables --no-synthetic-disclosure --audit 120 \
   > /workspace/queue.log 2>&1 < /dev/null &
 
