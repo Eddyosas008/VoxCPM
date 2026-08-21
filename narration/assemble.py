@@ -315,7 +315,13 @@ def assemble(
         )
         return result
 
-    completed = subprocess.run(command, capture_output=True, text=True)
+    # ffmpeg echoes the chapter titles back on stderr, so its output carries
+    # whatever the book is called. `text=True` alone decodes with the locale's
+    # preferred encoding, and a server shell without LANG resolves that to
+    # ASCII — so a French title raises UnicodeDecodeError and loses a book that
+    # was already fully narrated. Name the encoding rather than inherit it.
+    completed = subprocess.run(command, capture_output=True, text=True,
+                               encoding="utf-8", errors="replace")
     if completed.returncode != 0:
         result.pending_command = command
         tail = (completed.stderr or "").strip().splitlines()[-3:]

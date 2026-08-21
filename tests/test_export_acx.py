@@ -140,11 +140,26 @@ class TestWithoutFfmpeg:
         run(monkeypatch, str(book))
         assert "ffmpeg absent" in capsys.readouterr().out
 
+    def test_the_exit_code_says_nothing_was_delivered(self, monkeypatch, book):
+        """A directory of WAVs and an ``encoder.txt`` is what to encode, not
+        what to upload. Returning zero here told the caller the book was
+        delivered, and the queue marked it done — which it never replays."""
+        assert run(monkeypatch, str(book)) == 1
+        assert not list((book / "acx").glob("*.mp3"))
+
 
 class TestCheckOnly:
     def test_check_writes_nothing(self, monkeypatch, book):
         run(monkeypatch, str(book), "--check")
         assert not (book / "acx").exists()
+
+    def test_check_is_not_a_delivery_and_does_not_fail_for_not_being_one(
+        self, monkeypatch, book
+    ):
+        """``--check`` reports and writes nothing, by contract: the files it
+        did not encode are not files it failed to encode."""
+        monkeypatch.setattr(export_acx.assembly, "find_ffmpeg", lambda: None)
+        assert run(monkeypatch, str(book), "--check") == 0
 
     def test_check_still_reports_every_file(self, monkeypatch, book, capsys):
         run(monkeypatch, str(book), "--check")
@@ -168,3 +183,38 @@ class TestSplitting:
         titles = [entry["title"] for entry in report_of(book / "acx")["files"]]
         assert any("partie 1" in title for title in titles)
         assert any("partie 2" in title for title in titles)
+
+
+class TestSampleChapterChoice:
+    """L'extrait commercial doit venir de l'introduction.
+
+    Auparavant la règle était « le premier chapitre qui n'est pas un générique »,
+    et sur un livre réel elle a choisi la page de titre : l'acheteur entendait le
+    nom du livre récité et n'apprenait rien. Ce qui décide quelqu'un, c'est le
+    propos du livre, et c'est exactement ce que contient une introduction.
+    """
+
+    def test_the_introduction_wins_over_the_title_page(self):
+        titres = [
+            "Générique de début",
+            "Rebâtir l'Intimité Après Divorce",
+            "Introduction — Le mur invisible",
+            "Chapitre 1 — Les Ruines Invisibles",
+            "Générique de fin",
+        ]
+        assert export_acx.sample_chapter_index(titres) == 3
+
+    def test_front_matter_is_skipped_when_there_is_no_introduction(self):
+        titres = ["Générique de début", "Dédicace", "Avertissement médical",
+                  "Chapitre 1 — Le début", "Générique de fin"]
+        assert export_acx.sample_chapter_index(titres) == 4
+
+    @pytest.mark.parametrize("ouverture", ["Avant-propos", "Préface", "Prologue", "Préambule"])
+    def test_every_kind_of_opening_matter_counts(self, ouverture):
+        assert export_acx.sample_chapter_index(["Générique de début", ouverture, "Chapitre 1"]) == 2
+
+    def test_a_book_with_nothing_but_chapters_takes_the_first(self):
+        assert export_acx.sample_chapter_index(["Générique de début", "Chapitre 1", "Générique de fin"]) == 2
+
+    def test_a_book_of_nothing_but_credits_has_no_sample(self):
+        assert export_acx.sample_chapter_index(["Générique de début", "Générique de fin"]) is None

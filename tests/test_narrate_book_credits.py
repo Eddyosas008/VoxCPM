@@ -103,14 +103,20 @@ class TestChainedExport:
         assert (acx / "rapport_acx.json").is_file()
 
     def test_a_failed_export_does_not_lose_the_chapters(self, monkeypatch, book, tmp_path):
-        """Nine hours of narration must survive anything the exporter does."""
+        """Nine hours of narration must survive anything the exporter does.
+
+        Surviving is not succeeding, though. The exit code used to be zero
+        here, which told the queue the book was done — and done is never
+        replayed. The chapters stay; the code now says the delivery is not
+        there.
+        """
         outdir = tmp_path / "out"
         monkeypatch.setattr(
             narrate_book.subprocess,
             "run",
             lambda *a, **k: type("Result", (), {"returncode": 1})(),
         )
-        assert run(monkeypatch, book, outdir, "--title", "Le Livre", "--export-acx") == 0
+        assert run(monkeypatch, book, outdir, "--title", "Le Livre", "--export-acx") == 1
         assert sorted(outdir.glob("chapitre_*.wav"))
 
 

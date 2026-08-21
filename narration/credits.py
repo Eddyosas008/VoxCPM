@@ -112,6 +112,13 @@ class BookCredits:
     #: Human narrator. Left empty for a synthetic reading, which is then
     #: disclosed rather than passed off as a performance.
     narrator: str = ""
+    #: Name given to the synthetic voice — "Aurore Cabonet", "Gabriel Adam".
+    #: A catalogue read by the same voice deserves to credit it by name, the
+    #: way a publisher credits a virtual voice. It does **not** replace the
+    #: disclosure: the credit says the name *and* that the voice is synthetic,
+    #: because a name alone would present a machine as a performer, which is
+    #: exactly what distributors require not to happen.
+    voice_name: str = ""
     subtitle: str = ""
     publisher: str = ""
     year: str = ""
@@ -130,11 +137,23 @@ class BookCredits:
 
     @property
     def narrator_credit(self) -> str:
-        """Who the recording says read it."""
+        """Who the recording says read it.
+
+        Three cases rather than two. A human narrator is named and that is all.
+        A synthetic voice with a name is named *and* disclosed — "Aurore
+        Cabonet, une voix de synthèse" — because the name alone would credit a
+        performance that never happened. A synthetic voice without a name is
+        disclosed as before.
+        """
         narrator = _clean(self.narrator)
         if narrator:
             return narrator
-        return self._words["synthetic"] if self.disclose_synthetic else ""
+
+        voice_name = _clean(self.voice_name)
+        synthetic = self._words["synthetic"] if self.disclose_synthetic else ""
+        if voice_name and synthetic:
+            return f"{voice_name}, {synthetic}"
+        return voice_name or synthetic
 
     def _work(self) -> str:
         """« Title », by Author — the phrase both credits are built around."""
