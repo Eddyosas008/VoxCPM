@@ -146,6 +146,14 @@ def slug_du_m4b(m4b: pathlib.Path) -> str:
 
 
 def main() -> int:
+    # Le script écrit des filets et des flèches : sur une console cp1252 il
+    # tombait dessus, après avoir déjà remplacé la couverture de deux livres.
+    for flux in (sys.stdout, sys.stderr):
+        try:
+            flux.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("m4b", nargs="?", type=pathlib.Path)
@@ -164,7 +172,16 @@ def main() -> int:
         catalogue = {e["slug"]: e for e in json.loads(
             args.catalogue.read_text(encoding="utf-8"))}
         a_reparer, sans_source, ok = [], [], 0
-        for m4b in sorted(args.lot.glob("*_complet.m4b")):
+        # ``rglob`` et non ``glob`` : un livre rapatrié est un *dossier*
+        # (M4B + export ACX + rapport), pas un fichier posé à plat. Avec un
+        # glob plat, ce mode parcourait zéro fichier et annonçait tout de même
+        # « 0 à réparer » — le rapport d'un lot sain et celui d'un lot jamais
+        # regardé étaient le même.
+        m4bs = sorted(args.lot.rglob("*_complet.m4b"))
+        if not m4bs:
+            print(f"aucun *_complet.m4b sous {args.lot} — rien n'a été examiné")
+            return 1
+        for m4b in m4bs:
             dim = couverture_du_m4b(m4b)
             if dim and dim[0] == dim[1] and dim[0] >= COTE_MINIMAL:
                 ok += 1
@@ -184,7 +201,10 @@ def main() -> int:
 
         echecs = 0
         for m4b, cover, dim in a_reparer:
-            print(f"── {m4b.name}  ({dim[0]}x{dim[1]} → {cover.name})")
+            # ``dim`` est None quand le M4B n'a aucune image : c'est le cas de
+            # `livre-rebatir-intimite`, et le formatage l'ignorait.
+            actuel = f"{dim[0]}x{dim[1]}" if dim else "sans couverture"
+            print(f"── {m4b.name}  ({actuel} → {cover.name})")
             if args.dry_run:
                 continue
             if not remplacer(m4b, cover):
