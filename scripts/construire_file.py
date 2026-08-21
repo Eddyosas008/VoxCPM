@@ -24,18 +24,17 @@ import argparse
 import json
 import pathlib
 import re
-import struct
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+
+from narration.couverture import (  # noqa: E402
+    COTE_MINIMAL, IMAGES, choisir as couverture, dimensions,
+)
+
 VOIX_FEMININE = "Aurore — livre audio"
 VOIX_MASCULINE = "Alex Somerset"
-
-IMAGES = (".jpg", ".jpeg", ".png", ".webp")
-
-#: Côté minimal d'une couverture audio, en pixels : c'est le seuil d'Audible
-#: (ACX), et il est repris tel quel par les autres distributeurs.
-COTE_MINIMAL = 2400
 
 #: Un sujet intime, parental ou thérapeutique appelle la voix féminine.
 #:
@@ -54,98 +53,6 @@ INTIME = re.compile(
     r"\bcorps\b|\bfemmes?\b|\bintention\b",
     re.IGNORECASE,
 )
-
-
-def dimensions(f: pathlib.Path) -> tuple[int, int] | None:
-    """Largeur et hauteur d'une image, lues dans son en-tête.
-
-    Sans dépendance : le catalogue tient dans trois formats et leurs en-têtes
-    tiennent en trente lignes. Rien n'est décodé, seuls les premiers octets
-    sont lus, donc mesurer cent couvertures coûte le prix d'un ``ls``.
-    """
-    try:
-        with f.open("rb") as fh:
-            tete = fh.read(32)
-            if tete[:8] == b"\x89PNG\r\n\x1a\n":
-                l, h = struct.unpack(">II", tete[16:24])
-                return int(l), int(h)
-            if tete[:4] == b"RIFF" and tete[8:12] == b"WEBP":
-                fh.seek(0)
-                d = fh.read(40)
-                if d[12:16] == b"VP8X":
-                    return (int.from_bytes(d[24:27], "little") + 1,
-                            int.from_bytes(d[27:30], "little") + 1)
-                if d[12:16] == b"VP8 ":
-                    return (int.from_bytes(d[26:28], "little") & 0x3FFF,
-                            int.from_bytes(d[28:30], "little") & 0x3FFF)
-                if d[12:16] == b"VP8L":
-                    b = int.from_bytes(d[21:25], "little")
-                    return (b & 0x3FFF) + 1, ((b >> 14) & 0x3FFF) + 1
-                return None
-            if tete[:2] == b"\xff\xd8":
-                # JPEG : sauter de marqueur en marqueur jusqu'au SOFn, seul
-                # segment qui porte les dimensions. Les SOF 4, 8 et 12 sont
-                # des marqueurs de table, pas des cadres — d'où l'exclusion.
-                fh.seek(2)
-                while True:
-                    octet = fh.read(1)
-                    if not octet:
-                        return None
-                    if octet != b"\xff":
-                        continue
-                    while octet == b"\xff":
-                        octet = fh.read(1)
-                    marqueur = octet[0]
-                    if 0xC0 <= marqueur <= 0xCF and marqueur not in (0xC4, 0xC8, 0xCC):
-                        fh.read(3)
-                        h, l = struct.unpack(">HH", fh.read(4))
-                        return int(l), int(h)
-                    taille = struct.unpack(">H", fh.read(2))[0]
-                    fh.seek(taille - 2, 1)
-    except (OSError, struct.error, IndexError):
-        return None
-    return None
-
-
-def couverture(d: pathlib.Path) -> pathlib.Path | None:
-    """La couverture *audio* : carrée, et d'au moins 2400 pixels de côté.
-
-    Un dossier de livre contient plusieurs couvertures qui ne servent pas au
-    même produit — la jaquette imprimée, le rabat complet, la vignette ebook
-    en portrait. Prendre la première venue passe inaperçu jusqu'au dépôt, où
-    Audible refuse tout ce qui n'est pas carré ; la contrainte du distributeur
-    est donc devenue la règle de choix, au lieu d'un ordre de dossiers qui ne
-    la connaissait pas. À égalité, le fichier nommé pour l'audio l'emporte,
-    puis le plus grand.
-
-    Une couverture ebook 1600×2560 avait ainsi été retenue pour trois livres,
-    embarquée dans leur M4B, et n'aurait été rejetée qu'au dépôt.
-    """
-    vues: list[pathlib.Path] = []
-    for sous in ("_covers_v3", "_covers_v2", "_covers", "couverture", "formats"):
-        rep = d / sous
-        if rep.is_dir():
-            vues += sorted(rep.rglob("*"))
-    vues += sorted(d.glob("*"))
-
-    candidates = [f for f in vues
-                  if f.suffix.lower() in IMAGES and f.is_file()
-                  and f.stat().st_size > 20_000]
-
-    # Classer avant de mesurer, et s'arrêter à la première conforme. Le
-    # catalogue vit sur OneDrive, où lire le moindre octet d'un fichier le
-    # fait descendre en entier : mesurer les dix images d'un livre pour n'en
-    # garder qu'une rapatriait des gigaoctets et prenait des dizaines de
-    # minutes. L'ordre reflète la préférence — le fichier nommé pour l'audio,
-    # puis le plus grand — donc le résultat est celui du meilleur candidat,
-    # pas celui du premier rencontré.
-    candidates.sort(key=lambda f: (0 if "audio" in f.name.lower() else 1,
-                                   -f.stat().st_size))
-    for f in candidates:
-        dim = dimensions(f)
-        if dim is not None and dim[0] == dim[1] and dim[0] >= COTE_MINIMAL:
-            return f
-    return None
 
 
 def _depuis_json(d: pathlib.Path):

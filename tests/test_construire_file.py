@@ -22,6 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from narration import couverture as regle_couverture
+
 spec = importlib.util.spec_from_file_location(
     "construire_file", ROOT / "scripts" / "construire_file.py"
 )
@@ -125,13 +127,15 @@ class TestCouverture:
         _jpeg(tmp_path / "_covers_v3" / "audio_cover.jpg", 3000, 3000, octets=40_000)
 
         mesurees = []
-        vraie = construire_file.dimensions
+        vraie = regle_couverture.dimensions
 
         def compter(f):
             mesurees.append(f.name)
             return vraie(f)
 
-        monkeypatch.setattr(construire_file, "dimensions", compter)
+        # La règle vit dans narration.couverture ; construire_file n'en est
+        # plus qu'un appelant, comme narrate_book.
+        monkeypatch.setattr(regle_couverture, "dimensions", compter)
         choix = construire_file.couverture(tmp_path)
 
         assert choix.name == "audio_cover.jpg"

@@ -35,6 +35,10 @@ import time
 REPO = pathlib.Path(__file__).resolve().parent.parent
 PYTHON = sys.executable
 
+sys.path.insert(0, str(REPO))
+
+from narration import couverture  # noqa: E402
+
 
 def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -81,6 +85,64 @@ def run(cmd: list[str], logfile: pathlib.Path | None = None) -> tuple[int, str]:
     return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
+def commande(b: dict, txt: pathlib.Path, outdir: pathlib.Path, args) -> list[str]:
+    """La commande de narration d'un livre — une seule, pour les deux passages.
+
+    Le pré-vol la relance avec ``--dry-run``. Il faut donc qu'il vole *le même*
+    plan : quand il se contentait d'une commande réduite (ni ``--assemble``, ni
+    ``--cover``, ni titre), il validait un livre que la vraie prise assemblait
+    autrement — et la vérification de couverture, qui ne s'arme qu'à
+    l'assemblage, ne s'y déclenchait jamais.
+    """
+    cmd = [PYTHON, "scripts/narrate_book.py", str(txt), "--voice", b["voice"],
+           "--device", args.device, "--outdir", str(outdir),
+           "--qc-retries", args.qc_retries,
+           "--assemble", "m4b", "--export-acx"]
+    nom_voix = b.get("voice_name") or VOICE_NAMES.get(b["voice"], "")
+    if nom_voix:
+        cmd += ["--voice-name", nom_voix]
+    # Choix d'éditeur, porté par la file plutôt que codé ici : la mention
+    # de voix de synthèse est exigée par les plateformes, et la retirer
+    # doit rester une décision visible dans les données.
+    if b.get("no_synthetic_disclosure") or args.no_synthetic_disclosure:
+        cmd += ["--no-synthetic-disclosure"]
+    # Un livre peut avoir ses propres abréviations. Le lexique général est
+    # passé d'abord, le sien ensuite : ils s'empilent, il ne le remplace pas.
+    lexiques = ["conf/pronunciation_fr.json"] + list(b.get("lexicons") or [])
+    for lex in lexiques:
+        cmd += ["--lexicon", lex]
+    # Sans titre, narrate_book retombe sur le nom du fichier : cinq livres
+    # se sont annoncés « livre-un-esprits-reprogrammes » avant qu'on le
+    # remarque. Un .txt ne porte pas de métadonnées, donc la file les porte.
+    for option, cle in (("--title", "title"), ("--author", "author"),
+                        ("--cover", "cover")):
+        if b.get(cle):
+            cmd += [option, b[cle]]
+    return cmd
+
+
+def couvertures_manquantes(books: list[dict]) -> list[tuple[str, str]]:
+    """Les livres de la file dont la couverture ne serait pas déposable.
+
+    Posée avant le premier livre, et non au fil de l'eau : découvrir au
+    trente-deuxième livre que le quarantième n'a pas de couverture, c'est
+    l'apprendre quatre jours trop tard. Lire un en-tête d'image coûte le prix
+    d'un ``ls``, donc toute la file y passe.
+    """
+    manquantes = []
+    for b in books:
+        chemin = b.get("cover")
+        # La file porte des chemins relatifs, et les sous-processus tournent
+        # avec cwd=REPO : on résout comme eux, pour ne pas refuser une
+        # couverture que la narration, elle, trouverait.
+        if chemin and not pathlib.Path(chemin).is_absolute():
+            chemin = REPO / chemin
+        verdict = couverture.inspecter(chemin)
+        if not verdict.conforme:
+            manquantes.append((b["slug"], verdict.raison))
+    return manquantes
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("queue", help="queue.json")
@@ -95,6 +157,9 @@ def main() -> int:
                          "(0 = ne pas auditer)")
     ap.add_argument("--no-synthetic-disclosure", action="store_true",
                     help="Retirer la mention « voix de synthèse » de tous les génériques")
+    ap.add_argument("--sans-couverture", action="store_true",
+                    help="Narrer même les livres dont la couverture serait "
+                         "refusée au dépôt (à n'utiliser que pour un essai)")
     ap.add_argument("--keep", choices=("all", "deliverables"), default="all",
                     help="all : tout garder. deliverables : ne garder que le M4B, "
                          "l'export ACX et le rapport, et effacer les WAV de chapitre "
@@ -116,6 +181,21 @@ def main() -> int:
     logdir.mkdir(exist_ok=True)
 
     log(f"file de {len(books)} livre(s) — {sum(b['chars'] for b in books)} caractères")
+
+    # Les couvertures d'abord, toutes, et avant la première minute de GPU.
+    # Un livre déjà terminé sera sauté : sa couverture ne peut plus rien
+    # coûter, et le faire échouer bloquerait une reprise pour rien.
+    manquantes = couvertures_manquantes(
+        [b for b in books if state.get(b["slug"], {}).get("status") != "done"]
+    )
+    if manquantes:
+        for slug, raison in manquantes:
+            log(f"couverture refusée — {slug} : {raison}")
+        if not args.sans_couverture:
+            log(f"{len(manquantes)} livre(s) sans couverture déposable — file non lancée")
+            log("    corrigez la file, ou assumez-le avec --sans-couverture")
+            return 2
+        log(f"{len(manquantes)} livre(s) narrés sans couverture (--sans-couverture)")
 
     for i, b in enumerate(books, 1):
         slug = b["slug"]
@@ -165,8 +245,7 @@ def main() -> int:
 
         # Pré-vol : il ne charge pas le modèle, donc il coûte des secondes et
         # attrape ce qui ferait échouer trois heures plus tard.
-        rc, out = run([PYTHON, "scripts/narrate_book.py", str(txt), "--voice", b["voice"],
-                       "--device", args.device, "--outdir", str(outdir), "--dry-run"])
+        rc, out = run(commande(b, txt, outdir, args) + ["--dry-run"])
         if rc != 0:
             log(f"    pré-vol refusé — livre écarté")
             state[slug].update(status="failed", stage="dry-run", detail=out[-400:])
@@ -174,30 +253,7 @@ def main() -> int:
             continue
 
         t0 = time.time()
-        cmd = [PYTHON, "scripts/narrate_book.py", str(txt), "--voice", b["voice"],
-               "--device", args.device, "--outdir", str(outdir),
-               "--qc-retries", args.qc_retries,
-               "--assemble", "m4b", "--export-acx"]
-        nom_voix = b.get("voice_name") or VOICE_NAMES.get(b["voice"], "")
-        if nom_voix:
-            cmd += ["--voice-name", nom_voix]
-        # Choix d'éditeur, porté par la file plutôt que codé ici : la mention
-        # de voix de synthèse est exigée par les plateformes, et la retirer
-        # doit rester une décision visible dans les données.
-        if b.get("no_synthetic_disclosure") or args.no_synthetic_disclosure:
-            cmd += ["--no-synthetic-disclosure"]
-        # Un livre peut avoir ses propres abréviations. Le lexique général est
-        # passé d'abord, le sien ensuite : ils s'empilent, il ne le remplace pas.
-        lexiques = ["conf/pronunciation_fr.json"] + list(b.get("lexicons") or [])
-        for lex in lexiques:
-            cmd += ["--lexicon", lex]
-        # Sans titre, narrate_book retombe sur le nom du fichier : cinq livres
-        # se sont annoncés « livre-un-esprits-reprogrammes » avant qu'on le
-        # remarque. Un .txt ne porte pas de métadonnées, donc la file les porte.
-        for option, cle in (("--title", "title"), ("--author", "author"),
-                            ("--cover", "cover")):
-            if b.get(cle):
-                cmd += [option, b[cle]]
+        cmd = commande(b, txt, outdir, args)
         rc, tail = run(cmd, blog)
         mins = (time.time() - t0) / 60
         if rc != 0:

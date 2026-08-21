@@ -66,7 +66,7 @@ import app  # noqa: E402
 from narration import assemble as assembly  # noqa: E402
 from narration import audio as audio_tools  # noqa: E402
 from narration import cache as cache_tools  # noqa: E402
-from narration import chunking, credits, epub, quality, repair, text_en, text_fr  # noqa: E402
+from narration import chunking, couverture, credits, epub, quality, repair, text_en, text_fr  # noqa: E402
 
 #: Rough characters-per-second of finished narration, used only to estimate how
 #: long a book will run before committing hours of CPU to it.
@@ -353,6 +353,38 @@ def main() -> int:
     for index, segments in plan:
         print(f"  chapitre {index:03d}: {len(segments)} segment(s)  « {titles[index - 1][:50]} »")
 
+    # ---- couverture ----------------------------------------------------
+    # Vérifiée ici, avant que le modèle ne se charge — et donc aussi en
+    # --dry-run. Elle ne l'était qu'à l'assemblage, c'est-à-dire trois heures
+    # de GPU plus tard, où une couverture absente ou non carrée ne produisait
+    # qu'une ligne de journal que personne ne relit : `livre-rebatir-intimite`
+    # est ainsi sorti sans aucune couverture, et trois autres livres avec une
+    # vignette ebook en portrait. Une couverture ne coûte rien à corriger
+    # avant la narration et coûte la narration entière après.
+    cover_path = None
+    if args.assemble:
+        cover_path = Path(args.cover) if args.cover else None
+        origine = "fournie"
+        if cover_path is None and not args.no_cover and epub.is_epub(in_path):
+            # En dry-run on extrait ailleurs : un plan ne crée pas la sortie.
+            dest = Path(tempfile.mkdtemp()) if args.dry_run else outdir
+            dest.mkdir(parents=True, exist_ok=True)
+            cover_path = epub.extract_cover(in_path, dest)
+            origine = "tirée de l'EPUB"
+        if args.no_cover:
+            print("Couverture  : aucune (--no-cover) — les distributeurs en exigent une")
+        else:
+            verdict = couverture.inspecter(cover_path)
+            if verdict.conforme:
+                largeur, hauteur = verdict.dimensions
+                print(f"Couverture  : {Path(cover_path).name} "
+                      f"({largeur}×{hauteur}, {origine})")
+            else:
+                print(f"Couverture  : REFUS — {verdict.raison}")
+                print("              Corrigez-la avant de dépenser la narration, "
+                      "ou assumez l'absence avec --no-cover.")
+                return 2
+
     if args.dry_run:
         if plan and plan[0][1]:
             print("\nPremier segment après préparation du texte :")
@@ -557,15 +589,10 @@ def main() -> int:
         if not chapter_files:
             print("Rien à assembler.")
             return 1 if (args.qc_strict and defective) else 0
-        # The book carries its own cover; only an explicit --cover beats it.
-        cover_path = Path(args.cover) if args.cover else None
-        if cover_path is None and not args.no_cover and epub.is_epub(in_path):
-            cover_path = epub.extract_cover(in_path, outdir)
-            if cover_path:
-                print(f"Couverture  : {cover_path.name} (tirée de l'EPUB)")
-        if cover_path and not cover_path.is_file():
-            print(f"Couverture introuvable, ignorée : {cover_path}")
-            cover_path = None
+        # La couverture a été choisie et vérifiée au pré-vol : on ne la
+        # redécide pas ici, sinon la vérification ne porterait pas sur ce qui
+        # est réellement embarqué.
+        cover_path = Path(cover_path) if cover_path else None
 
         target = outdir / f"{outdir.name}_complet.{args.assemble}"
         print(f"\nAssemblage de {len(chapter_files)} chapitre(s) -> {target.name}")
