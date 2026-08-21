@@ -307,11 +307,34 @@ def main() -> int:
         titles = [opening_title] + titles + [closing_title]
 
     lexicon = {}
+    #: Les lexiques nommés qui n'ont rien donné. `load_lexicon` est tolérant
+    #: par dessein — un fichier d'appoint mal formé ne doit pas tuer une
+    #: narration — mais la tolérance était devenue silence : le lexique commun
+    #: porte `ce` → `çe`, 12 498 occurrences dans le catalogue, validé à
+    #: l'oreille. Un chemin faux, une virgule en trop, et trois cents livres se
+    #: narrent avec la mauvaise prononciation du mot le plus fréquent sans
+    #: qu'une ligne le dise. La correction, elle, invalide le cache de segments
+    #: de *tous* les livres : elle coûte le catalogue, pas un fichier.
+    lexiques_vides: list[str] = []
     if not args.no_text_prep:
         # Empiler plutôt que remplacer : un livre qui définit son abréviation
         # maison ne doit pas perdre au passage les sigles communs.
-        for chemin in (args.lexicon or ["conf/pronunciation_fr.json"]):
-            lexicon.update(text_fr.load_lexicon(chemin))
+        demandes = list(args.lexicon or [])
+        for chemin in (demandes or ["conf/pronunciation_fr.json"]):
+            entrees = text_fr.load_lexicon(chemin)
+            lexicon.update(entrees)
+            if not entrees:
+                raison = ("introuvable" if not Path(chemin).is_file()
+                          else "illisible ou sans entrée utilisable")
+                # Un lexique explicitement demandé qui ne donne rien est une
+                # faute de frappe, pas un choix : c'est ce cas qu'on refuse.
+                # Le défaut implicite, lui, peut légitimement manquer quand on
+                # narre à la main depuis ailleurs — on le dit sans refuser.
+                if demandes:
+                    lexiques_vides.append(f"{chemin} ({raison})")
+                else:
+                    print(f"Lexique     : {chemin} {raison} — aucune "
+                          f"prononciation n'est appliquée")
         prepare = (
             text_en.normalize_english if args.language == "en" else text_fr.normalize_french
         )
@@ -353,6 +376,14 @@ def main() -> int:
     for index, segments in plan:
         print(f"  chapitre {index:03d}: {len(segments)} segment(s)  « {titles[index - 1][:50]} »")
 
+    # ---- lexique -------------------------------------------------------
+    if lexiques_vides:
+        print(f"Lexique     : REFUS — {', '.join(lexiques_vides)}")
+        print("              Un lexique nommé qui ne donne rien est une faute "
+              "de frappe, pas un choix ; et le corriger après coup invalide "
+              "le cache de segments de tous les livres.")
+        return 2
+
     # ---- couverture ----------------------------------------------------
     # Vérifiée ici, avant que le modèle ne se charge — et donc aussi en
     # --dry-run. Elle ne l'était qu'à l'assemblage, c'est-à-dire trois heures
@@ -361,6 +392,9 @@ def main() -> int:
     # est ainsi sorti sans aucune couverture, et trois autres livres avec une
     # vignette ebook en portrait. Une couverture ne coûte rien à corriger
     # avant la narration et coûte la narration entière après.
+    #: Ce qui a été demandé et n'a pas été produit. Vide vaut zéro en sortie.
+    manque: list[str] = []
+
     cover_path = None
     if args.assemble:
         cover_path = Path(args.cover) if args.cover else None
@@ -587,8 +621,14 @@ def main() -> int:
     if args.assemble:
         chapter_files = sorted(p for p in outdir.glob("chapitre_*.wav"))
         if not chapter_files:
-            print("Rien à assembler.")
-            return 1 if (args.qc_strict and defective) else 0
+            # Sortir zéro ici disait « terminé » d'un livre qui n'existe pas.
+            # C'est ce qui a laissé la file annoncer « terminé — 0 chapitre(s) »
+            # sur un livre pourtant complet, lancé depuis le mauvais dossier :
+            # rien n'était trouvé, tout allait bien, et la purge des WAV — qui
+            # dépend de ce compte — ne se déclenchait pas. Un volume saturé
+            # trois livres plus loin, pour une cause étrangère à la narration.
+            print(f"Rien à assembler : aucun chapitre_*.wav dans {outdir}")
+            return 1
         # La couverture a été choisie et vérifiée au pré-vol : on ne la
         # redécide pas ici, sinon la vérification ne porterait pas sur ce qui
         # est réellement embarqué.
@@ -610,6 +650,11 @@ def main() -> int:
         if result.pending_command:
             print("À exécuter une fois ffmpeg installé :")
             print("  " + subprocess.list2cmdline(result.pending_command))
+            # La commande est utile à qui la lit ; elle ne remplace pas le
+            # fichier. Tant qu'il manque, le livre n'est pas assemblé, et la
+            # file ne doit pas le marquer terminé — elle ne le reprendrait
+            # jamais.
+            manque.append("le M4B (ffmpeg absent ou en échec)")
     else:
         print("Astuce : ajoutez --assemble m4b pour produire un fichier unique avec chapitres, "
               "ou lancez scripts/assemble_audiobook.py plus tard.")
@@ -624,10 +669,20 @@ def main() -> int:
             [sys.executable, str(Path(__file__).with_name("export_acx.py")), str(outdir)]
         )
         if result.returncode:
-            print("Export : des fichiers sont hors norme, voir ci-dessus.")
+            print("Export : des fichiers sont hors norme ou n'ont pas été "
+                  "encodés, voir ci-dessus.")
+            manque.append("un export ACX déposable")
 
     if args.qc_strict and defective:
         print(f"--qc-strict : {defective} segment(s) toujours défectueux.")
+        return 1
+
+    # Le code de sortie dit une seule chose, et il faut qu'il la dise bien :
+    # le livrable demandé existe-t-il et peut-il être déposé ? La file s'y fie
+    # pour marquer un livre « terminé », et « terminé » ne se rejoue pas.
+    if manque:
+        print()
+        print(f"Incomplet : il manque {', '.join(manque)}.")
         return 1
     return 0
 

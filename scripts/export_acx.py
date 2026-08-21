@@ -328,7 +328,12 @@ def main() -> int:
             )
             print(f"Toutes les commandes sont dans {script}")
 
-    return 1 if failures else 0
+    # Des commandes qui restent, ce sont des MP3 qui n'existent pas : le
+    # dossier ne contient alors que des WAV et un `encoder.txt`, et rien ne
+    # peut être déposé. Sortir zéro là-dessus, c'est dire « livré » d'un
+    # dossier vide — sauf en --check, qui n'écrit rien par contrat.
+    reste_a_encoder = bool(commands) and not args.check
+    return 1 if (failures or reste_a_encoder) else 0
 
 
 if __name__ == "__main__":

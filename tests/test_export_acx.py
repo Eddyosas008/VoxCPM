@@ -140,11 +140,26 @@ class TestWithoutFfmpeg:
         run(monkeypatch, str(book))
         assert "ffmpeg absent" in capsys.readouterr().out
 
+    def test_the_exit_code_says_nothing_was_delivered(self, monkeypatch, book):
+        """A directory of WAVs and an ``encoder.txt`` is what to encode, not
+        what to upload. Returning zero here told the caller the book was
+        delivered, and the queue marked it done — which it never replays."""
+        assert run(monkeypatch, str(book)) == 1
+        assert not list((book / "acx").glob("*.mp3"))
+
 
 class TestCheckOnly:
     def test_check_writes_nothing(self, monkeypatch, book):
         run(monkeypatch, str(book), "--check")
         assert not (book / "acx").exists()
+
+    def test_check_is_not_a_delivery_and_does_not_fail_for_not_being_one(
+        self, monkeypatch, book
+    ):
+        """``--check`` reports and writes nothing, by contract: the files it
+        did not encode are not files it failed to encode."""
+        monkeypatch.setattr(export_acx.assembly, "find_ffmpeg", lambda: None)
+        assert run(monkeypatch, str(book), "--check") == 0
 
     def test_check_still_reports_every_file(self, monkeypatch, book, capsys):
         run(monkeypatch, str(book), "--check")

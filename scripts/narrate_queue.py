@@ -143,6 +143,25 @@ def couvertures_manquantes(books: list[dict]) -> list[tuple[str, str]]:
     return manquantes
 
 
+def livrables_absents(outdir: pathlib.Path, wavs: int) -> list[str]:
+    """Ce qui manque à un livre pour être déposable, nommé.
+
+    On regarde les fichiers, pas le code de sortie de qui les fabrique : un
+    livre lancé depuis le mauvais dossier s'était déclaré terminé sans qu'un
+    seul chapitre soit trouvé. Un MP3 dans ``acx/`` plutôt que le dossier seul,
+    parce que sans ffmpeg l'export y laisse des WAV et un ``encoder.txt`` —
+    de quoi encoder, pas de quoi déposer.
+    """
+    acx = outdir / "acx"
+    livrables = {
+        "M4B": bool(list(outdir.glob("*_complet.m4b"))
+                    + list(outdir.glob("*_complet.m4a"))),
+        "chapitres narrés": wavs > 0,
+        "export ACX (MP3)": acx.is_dir() and any(acx.glob("*.mp3")),
+    }
+    return [nom for nom, present in livrables.items() if not present]
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("queue", help="queue.json")
@@ -301,6 +320,24 @@ def main() -> int:
                  "--merge", str(qpath.parent / "prononciation_a_valider.json")], blog)
 
         wavs = len(list(outdir.glob("*.wav"))) if outdir.is_dir() else 0
+
+        # « terminé » doit vouloir dire « déposable », parce que « terminé » ne
+        # se rejoue pas : `state.json` saute ces livres-là pour toujours. La
+        # narration a rendu zéro, mais rendre zéro n'a jamais garanti qu'un
+        # fichier existe — un livre lancé depuis le mauvais dossier s'était
+        # ainsi déclaré terminé sans un seul chapitre trouvé. On regarde donc
+        # les livrables eux-mêmes plutôt que le code de sortie de qui les
+        # fabrique.
+        absents = livrables_absents(outdir, wavs)
+        if absents:
+            log(f"    narration rendue sans livrable — manque : {', '.join(absents)}")
+            log("    livre marqué en échec plutôt que terminé, pour qu'une "
+                "reprise le retrouve")
+            state[slug].update(status="failed", stage="livraison",
+                               minutes=round(mins, 1), chapters_wav=wavs,
+                               detail="livrables manquants : " + ", ".join(absents))
+            save()
+            continue
 
         # Un livre laisse ~3 Go de WAV de chapitre derrière lui. Vingt livres
         # saturent le volume au quatrième, et une file qui meurt d'un disque
