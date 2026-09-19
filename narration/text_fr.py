@@ -213,6 +213,14 @@ _ABBREVIATIONS: tuple[tuple[str, str], ...] = (
     (r"\bp\.(?=\s*\d)", "page"),
     (r"\bn[°º]\s*(?=\d)", "numéro "),
     (r"[°º](?=\s|$)", " degrés"),
+    # « 20 h » est déjà lu par la règle des heures, « 5 min » ne l'était par
+    # personne : 106 fois dans les vingt et un livres, dit « min ». Le singulier
+    # s'écrit ici en toutes lettres — « 1 minute » serait rendu « un minute »
+    # par la passe des nombres, qui ne connaît pas le genre du mot qui suit.
+    # (Le défaut subsiste au-delà de un : « 51 min », une fois dans le
+    # catalogue, se dit « cinquante et un minutes ».)
+    (r"\b1\s*min\b(?!ute)", "une minute"),
+    (r"(?<=\d)\s*min\b(?!ute)", " minutes"),
 )
 
 
@@ -231,7 +239,11 @@ _NUM = rf"\d{{1,3}}(?:[{_SEP}]\d{{3}})+|\d+"
 # otherwise turn the extremely common "Le", "Ce", "De" and "Me" into ordinals —
 # "Le manuscrit" read aloud as "cinquantième manuscrit".
 _RE_ROMAN_ORDINAL = re.compile(r"\b([IVX]|[IVXLCDM]{2,15})(?:e|è?me|ᵉ)\b")
-_RE_TIME = re.compile(r"\b(\d{1,2})\s*[hH]\s*(\d{2})?\b(?!\d)")
+# The minutes carry their own separator: with the space outside the optional
+# group, "9h du matin" matched "9h " and came back as "neuf heuresdu matin".
+# The trailing guard is what keeps "35ha" and "9h305" out — a bare `\b` would
+# let the first of them through as "trente-cinq heures a".
+_RE_TIME = re.compile(r"\b(\d{1,2})\s*[hH](?:\s*(\d{2}))?(?!\w)")
 _RE_CURRENCY = re.compile(rf"({_NUM})(?:,(\d{{1,2}}))?\s*([€$£])")
 _RE_CURRENCY_PREFIX = re.compile(rf"([€$£])\s*({_NUM})(?:,(\d{{1,2}}))?")
 _RE_PERCENT = re.compile(rf"({_NUM}(?:,\d+)?)\s*%")
@@ -264,11 +276,188 @@ def _spell_decimal(whole: str, frac: str) -> str:
 # --------------------------------------------------------------------------
 
 
+#: Le blanc d'un formulaire : un trait à remplir au stylo.
+_BLANK = re.compile(r"_{2,}")
+
+#: Ce qu'on efface après le blanc s'arrête à la ponctuation forte : au-delà,
+#: ce n'est plus l'unité qui accompagnait le trait, c'est la phrase suivante.
+_BLANK_TAIL = re.compile(r"_{2,}[^(.!?;\n]*")
+
+#: Un blanc long est un trait de formulaire ; une queue longue est de la prose
+#: qui se trouvait derrière. Sur les trois livres concernés, la plus longue
+#: queue légitime fait 28 caractères (« ___ fois par jour en moyenne »).
+_MAX_TAIL = 40
+
+#: Séparateurs qu'un champ vidé laisse pendre à ses extrémités.
+_ORPHAN_EDGE = re.compile(r"^[\s:;,+/–—-]+|[\s:;,+/–—-]+$")
+
+
+def _form_fields(line: str) -> list[str]:
+    """Découper une ligne de formulaire sur ses barres obliques de premier rang.
+
+    Une parenthèse en protège une : « Temps réel mesuré (Screen Time /
+    Bien-être numérique) » est un seul champ, pas deux.
+    """
+    fields: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in line:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch == "/" and depth == 0:
+            fields.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    fields.append("".join(current))
+    return fields
+
+
+def _strip_form_blanks(text: str) -> str:
+    """Rendre lisible une ligne à remplir, ou la faire taire.
+
+    Effacer le seul trait ne suffisait pas, et c'est ce qui a été livré :
+    « Jour 5: ___ minutes (objectif: 10 min) / Ressenti: ___ » devenait
+    « Jour 5 : minutes (objectif : 10 min) / Ressenti : », que le moteur a
+    narré tel quel — l'audit l'a relu en « Jour 5, minute objectif, 10 mines,
+    essenci », sept fois de suite, dans un livre déjà livré.
+
+    Ce qui reste après le trait n'a de sens qu'avec lui : « ___ heures ___
+    minutes » énonce des unités sans grandeur, « ___ h / ___ h / ___ h » trois
+    fois rien. On efface donc le trait **et sa queue**, jusqu'à la parenthèse
+    ou la barre oblique suivante — la parenthèse porte souvent la seule vraie
+    information de la ligne (« objectif : 10 min ») et doit survivre.
+
+    L'intitulé, lui, reste toujours : c'est une consigne que l'auditeur peut
+    suivre. « Application la plus consultée : ______ » devient « Application la
+    plus consultée. » Une ligne qui n'était qu'un trait disparaît, faute
+    d'avoir jamais rien dit.
+
+    Trois livres de la file portaient ces lignes — 68, 11 et 8 — et aucun
+    n'aurait dû les faire entendre.
+    """
+    if "__" not in text:
+        return text
+
+    def deblank(field: str) -> str:
+        def cut(m: re.Match) -> str:
+            # Une queue trop longue n'est pas une unité, c'est une phrase :
+            # on se contente alors d'ôter le trait, sans l'emporter avec lui.
+            if len(m.group(0)) <= _MAX_TAIL:
+                return ""
+            return _BLANK.sub(" ", m.group(0))
+
+        return _BLANK_TAIL.sub(cut, field)
+
+    def rewrite(line: str) -> str:
+        if not _BLANK.search(line):
+            return line
+        kept = []
+        for field in _form_fields(line):
+            field = _ORPHAN_EDGE.sub("", deblank(field)).strip()
+            # « Jour 5 : (objectif : 10 min) » — le deux-points a perdu sa
+            # valeur, la parenthèse la porte désormais seule.
+            field = re.sub(r"\s*:\s*(?=\()", " ", field)
+            if re.search(r"[^\W\d_]|\d", field):
+                kept.append(field)
+        if not kept:
+            return ""
+        rebuilt = ". ".join(kept)
+        return rebuilt if rebuilt[-1] in ".!?…:;" else rebuilt + "."
+
+    return "\n".join(rewrite(line) for line in text.split("\n"))
+
+
+def _clean_symbols(text: str) -> str:
+    """Traduire en mots les signes qu'un manuscrit garde et qu'on ne dit pas.
+
+    Un manuscrit n'est pas que de la prose : il porte des restes de mise en
+    page, des cases à cocher, des flèches, de l'écriture inclusive, des
+    commandes de traitement de texte. Le moteur les lit — ou pire, il en lit
+    une partie : ``
+ewpage`` perdait sa barre oblique au nettoyage markdown et
+    devenait « ewpage », prononcé tel quel au milieu d'un chapitre.
+
+    Chaque règle vient d'un relevé sur les vingt et un livres de la file, pas
+    d'une liste imaginée : 571 lignes à remplir, 163 appels de note, 107 points
+    médians, 55 commandes LaTeX, 47 degrés, 26 esperluettes.
+    """
+    # D'abord les commandes de traitement de texte : le nettoyage markdown
+    # mangerait la barre oblique et laisserait « ewpage », lu tel quel.
+    text = re.sub(r"\\[a-zA-Z]+\*?(?:\{[^}]*\})*", " ", text)
+
+    # Unités collées à un nombre. L'ordre compte : sans la règle Celsius avant
+    # la règle générale, « 18,5 °C » deviendrait « 18,5 degrésC ».
+    text = re.sub(r"\s*°\s*C(?![a-zà-ÿ])", " degrés Celsius", text)
+    text = re.sub(r"\s*°\s*F(?![a-zà-ÿ])", " degrés Fahrenheit", text)
+    text = re.sub(r"(\d)\s*°", r"\1 degrés", text)
+
+    # Un intervalle chiffré. Le trait d'union se dit « à », et ne pas le dire
+    # ne laisse pas un silence : il colle les deux nombres l'un à l'autre et la
+    # passe des nombres les fond en un seul. « La pandémie de 2020-2022 » se
+    # narrait « deux mille vingt-deux mille vingt-deux ». 726 intervalles dans
+    # les vingt et un livres de la file.
+    #
+    # Les bornes acceptent un horaire (« 14h-15h30 »), et les deux gardes
+    # interdisent qu'une chaîne plus longue soit prise pour un intervalle :
+    # « 4-7-8 » est une respiration, pas « quatre à sept à huit », et
+    # « 5-4-3-2-1 » un exercice d'ancrage.
+    text = re.sub(
+        r"(?<![\d\-–])(\d{1,4}(?:h\d{0,2})?)\s*[-–]\s*(\d{1,4}(?:h\d{0,2})?)(?![\d\-–])",
+        r"\1 à \2",
+        text,
+    )
+
+    # Signes mathématiques au fil d'une phrase.
+    text = re.sub(r"\s*×\s*", " fois ", text)
+    text = re.sub(r"(?<=[\w)])\s*=\s*(?=[\w(])", " égale ", text)
+    text = re.sub(r"\s*&\s*", " et ", text)
+
+    # Flèches et chemins d'interface : « Réglages > Temps d'écran ».
+    text = re.sub(r"\s*[→⟶➜]\s*", " puis ", text)
+    text = re.sub(r"(?<=[a-zà-ÿ0-9])\s*>\s*(?=[A-ZÀ-Þa-zà-ÿ])", " puis ", text)
+
+    # Écriture inclusive : « conjoint·e » se dit « conjoint ou conjointe ». Il
+    # faut le mot entier pour reconstruire la forme accordée ; la terminaison
+    # seule ne suffit pas, et « conjoint ou e » ne veut rien dire.
+    text = re.sub(
+        r"([a-zà-ÿ]{2,})[·‧∙]([a-zà-ÿ]{1,3})(?![a-zà-ÿ])",
+        lambda m: f"{m.group(1)} ou {m.group(1)}{m.group(2)}",
+        text,
+    )
+
+    # Restes de formulaire : lignes à remplir, cases à cocher, appels de note.
+    text = _strip_form_blanks(text)
+    text = re.sub(r"[☐☑✓✗▢]", " ", text)
+    text = re.sub(r"(?<=[a-zà-ÿ])\*(?=[\s,.;:)])", "", text)
+
+    return re.sub(r"[  ]{2,}", " ", text)
+
+
+#: Lettres modificatives en exposant, telles qu'un traitement de texte les
+#: produit pour « 5ᵉ » ou « 1ʳᵉ ». Elles ressemblent à leurs équivalents
+#: ordinaires et n'en sont pas : la règle des ordinaux ne les voit pas, « 5ᵉ »
+#: traverse la normalisation intact, et le normaliseur interne du moteur meurt
+#: dessus — assert len(input) > 0, après quarante et une minutes de narration.
+_EXPOSANTS = {
+    "ᵃ": "a", "ᵇ": "b", "ᶜ": "c", "ᵈ": "d", "ᵉ": "e", "ᶠ": "f", "ᵍ": "g",
+    "ʰ": "h", "ⁱ": "i", "ʲ": "j", "ᵏ": "k", "ˡ": "l", "ᵐ": "m", "ⁿ": "n",
+    "ᵒ": "o", "ᵖ": "p", "ʳ": "r", "ˢ": "s", "ᵗ": "t", "ᵘ": "u", "ᵛ": "v",
+    "ʷ": "w", "ˣ": "x", "ʸ": "y", "ᶻ": "z",
+}
+_EXPOSANTS_RE = re.compile("|".join(map(re.escape, _EXPOSANTS)))
+
+
 def _clean_typography(text: str) -> str:
     """Normalise Unicode punctuation to forms the engine handles predictably."""
     text = unicodedata.normalize("NFC", text)
     text = text.replace("’", "'").replace("‘", "'")
     text = text.replace("“", '"').replace("”", '"')
+    # Avant tout le reste : « 5ᵉ » doit redevenir « 5e » pour que la règle des
+    # ordinaux le lise, sinon il arrive intact jusqu'au moteur.
+    text = _EXPOSANTS_RE.sub(lambda m: _EXPOSANTS[m.group(0)], text)
     text = re.sub(r"[   ]", " ", text)
     text = re.sub(r"\.{3,}", "…", text)
     return text
@@ -342,7 +531,22 @@ def _apply_lexicon(text: str, lexicon: Mapping[str, object]) -> str:
             pattern = re.compile(word + (rf"(?=\s*(?:{entry.before}))" if entry.before else ""),
                                  re.IGNORECASE)
             replacement = entry.spoken.replace("\\", "\\\\")
-        text = pattern.sub(replacement, text)
+
+        if entry.after:
+            text = pattern.sub(replacement, text)
+        else:
+            # La correspondance ignore la casse, donc « Ces » en tête de phrase
+            # tomberait sur « cés » en minuscule. Rendre la majuscule quand le
+            # mot d'origine en portait une : une phrase qui commence en
+            # minuscule est une anomalie gratuite, et la règle vaut pour toutes
+            # les entrées, pas seulement celle qui l'a révélée.
+            def _garder_la_casse(m: re.Match) -> str:
+                trouve = m.group(0)
+                if trouve[:1].isupper() and entry.spoken[:1].islower():
+                    return entry.spoken[:1].upper() + entry.spoken[1:]
+                return entry.spoken
+
+            text = pattern.sub(_garder_la_casse, text)
     return text
 
 
@@ -450,6 +654,46 @@ def _clean_dialogue(text: str, strip_quotes: bool) -> str:
     return text
 
 
+_RE_PARENTHETICAL = re.compile(r"\(([^()]{0,400})\)")
+
+
+def _flatten_parentheses(text: str) -> str:
+    """Turn a parenthetical aside into the apposition a narrator would speak.
+
+    Parentheses make no sound of their own, but the model treats an opening one
+    as a bracket it must close, and on a long enumeration it gives up partway.
+    Across the first twenty books, 86% of the truncated segments held a
+    parenthesis against 29% of segments overall — and 30% of segments of the
+    same length, so it is the construction that costs, not the length. "Les
+    approches alternatives (keynésienne, institutionnaliste, marxiste,
+    écologique)" came out as 2.1 seconds of audio for 260 characters of text.
+
+    Commas read aloud the same way. Short asides used to be left alone — a
+    date, a source — on the grounds that they had never truncated. Measured
+    again on a book narrated *with* this pass in place, that exemption is what
+    was left of the defect: of sixty-nine segments transcribed back, the eight
+    that stopped early all carried a parenthesis, and all eight carried one the
+    exemption had spared — « (REM) », « (N3) », « (chapitre dix) »,
+    « (urgences pédiatriques) ». Not one of the fifty-one segments without a
+    parenthesis stopped early. Length was never the trigger; the bracket was.
+    """
+
+    def replace(match: "re.Match[str]") -> str:
+        inner = match.group(1).strip()
+        if not inner:
+            return " "
+        return f", {inner}, "
+
+    text = _RE_PARENTHETICAL.sub(replace, text)
+    # The apposition's closing comma lands on whatever punctuation ended the
+    # host sentence: "…marxiste, ." Nothing in French wants a comma there.
+    text = re.sub(r",\s*([.;:!?…])", r"\1", text)
+    # An aside that ended the line has nothing to lean its comma against —
+    # "le rapport, deux mille huit," — and a trailing comma is exactly the
+    # unclosed construction this pass exists to remove.
+    return re.sub(r"(?m),[ \t]*$", "", text)
+
+
 def _tidy_whitespace(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" ([,.;:!?…])", r"\1", text)
@@ -483,6 +727,7 @@ def normalize_french(
         return ""
 
     text = _clean_typography(text)
+    text = _clean_symbols(text)
     if strip_markdown:
         text = _strip_markdown(text)
     if lexicon:
@@ -495,6 +740,8 @@ def normalize_french(
     text = _expand_percent(text)
     text = _expand_ordinal_marks(text)
     text = _expand_numbers(text)
+    # After the markdown pass, so that a link's "(url)" is already gone.
+    text = _flatten_parentheses(text)
     text = _clean_dialogue(text, strip_quotes)
     return _tidy_whitespace(text)
 

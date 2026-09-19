@@ -114,3 +114,40 @@ class TestShape:
     def test_the_two_files_have_stable_names(self):
         assert OPENING_TITLE and CLOSING_TITLE
         assert OPENING_TITLE != CLOSING_TITLE
+
+
+class TestNamedSyntheticVoice:
+    """Nommer la voix ne dispense pas de dire qu'elle est synthétique.
+
+    Un catalogue lu par la même voix mérite qu'on la crédite — les éditeurs le
+    font pour leurs voix virtuelles. Mais le nom seul créditerait une
+    interprétation qui n'a pas eu lieu, et c'est précisément ce que les
+    plateformes exigent d'éviter. Les deux se disent, jamais l'un à la place
+    de l'autre.
+    """
+
+    def test_the_name_and_the_disclosure_are_both_said(self):
+        c = BookCredits(title="Un livre", author="Un auteur", voice_name="Aurore Cabonet")
+        assert "Aurore Cabonet" in c.opening()
+        assert "voix de synthèse" in c.opening()
+
+    def test_the_closing_credit_says_both_too(self):
+        c = BookCredits(title="Un livre", author="Un auteur", voice_name="Gabriel Adam")
+        closing = c.closing()
+        assert "Gabriel Adam" in closing
+        assert "voix de synthèse" in closing
+
+    def test_a_human_narrator_still_wins_and_stands_alone(self):
+        c = BookCredits(title="Un livre", narrator="Jean Dupont", voice_name="Gabriel Adam")
+        assert "Jean Dupont" in c.opening()
+        assert "Gabriel Adam" not in c.opening()
+        assert "voix de synthèse" not in c.opening()
+
+    def test_without_a_name_the_disclosure_is_unchanged(self):
+        c = BookCredits(title="Un livre")
+        assert "voix de synthèse" in c.opening()
+
+    def test_disabling_the_disclosure_leaves_the_name_alone(self):
+        # Le désactiver reste un acte délibéré, documenté comme tel.
+        c = BookCredits(title="Un livre", voice_name="Gabriel Adam", disclose_synthetic=False)
+        assert c.narrator_credit == "Gabriel Adam"

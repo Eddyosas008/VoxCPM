@@ -83,12 +83,76 @@ class Segment:
     paragraph: int = 0
 
 
+#: Where a sentence too long to send whole may be cut, best first. A colon or a
+#: semicolon already carries a pause in the reading; a comma carries a lighter
+#: one; a dash lighter still. All of them are places a narrator breathes.
+_CLAUSE_BOUNDARIES = ("; ", " : ", ", ", " — ", " – ")
+
+
+def _split_long_sentence(sentence: str, max_chars: int) -> List[str]:
+    """Cut an over-long sentence at the places a narrator would breathe.
+
+    This used to hand the sentence over whole, on the reasoning that a cut
+    mid-clause is more audible than a slightly long segment. Measurement says
+    otherwise: an over-long segment is not read slightly long, it is *truncated*
+    by the engine. Across one book, the defect rate was 4-8% below three hundred
+    characters, 20% between three and four hundred, and 100% on the single
+    679-character segment — which came back as 679 characters in 16.2s where
+    34s were needed, i.e. half the sentence simply missing.
+
+    Half a sentence lost is worse than a comma turned into a breath.
+    """
+    if len(sentence) <= max_chars:
+        return [sentence]
+
+    for boundary in _CLAUSE_BOUNDARIES:
+        if boundary not in sentence:
+            continue
+        # Split so the separator stays attached to the clause it closes:
+        # `"a, b".split(", ")` would drop the comma, and a comma dropped is a
+        # breath the narrator no longer takes.
+        parts = re.split(f"({re.escape(boundary)})", sentence)
+        tokens = [
+            (parts[i] + (parts[i + 1] if i + 1 < len(parts) else "")).strip()
+            for i in range(0, len(parts), 2)
+        ]
+        tokens = [t for t in tokens if t]
+
+        pieces, current = [], ""
+        for token in tokens:
+            candidate = f"{current} {token}" if current else token
+            if current and len(candidate) > max_chars:
+                pieces.append(current)
+                current = token
+            else:
+                current = candidate
+        if current:
+            pieces.append(current)
+        # Only accept a boundary that actually solved the problem; a sentence
+        # whose commas all sit in the first ten words is not helped by them.
+        if pieces and all(len(p) <= max_chars for p in pieces):
+            return pieces
+
+    # No usable boundary. Sending it whole loses half of it, so fall back to
+    # word boundaries: audible, but every word survives.
+    words, pieces, current = sentence.split(), [], ""
+    for word in words:
+        candidate = f"{current} {word}" if current else word
+        if current and len(candidate) > max_chars:
+            pieces.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        pieces.append(current)
+    return pieces or [sentence]
+
+
 def _pack_sentences(text: str, max_chars: int) -> List[str]:
     """Greedily pack whole sentences into chunks no longer than ``max_chars``.
 
-    A single sentence longer than the limit becomes its own chunk: splitting it
-    further would cut mid-clause, which is far more audible than a slightly long
-    segment.
+    A sentence longer than the limit is cut at clause boundaries rather than
+    sent whole — see ``_split_long_sentence`` for why that trade was reversed.
     """
     text = (text or "").strip()
     if not text:
@@ -101,7 +165,7 @@ def _pack_sentences(text: str, max_chars: int) -> List[str]:
             if current:
                 chunks.append(current)
                 current = ""
-            chunks.append(sentence)
+            chunks.extend(_split_long_sentence(sentence, max_chars))
         elif current and len(current) + 1 + len(sentence) > max_chars:
             chunks.append(current)
             current = sentence
@@ -119,6 +183,60 @@ def split_text_into_chunks(text: str, max_chars: int = DEFAULT_MAX_CHARS) -> Lis
     and anything written against the original helper in ``app.py``).
     """
     return _pack_sentences(text, max_chars)
+
+
+#: A segment carrying fewer speakable characters than this is not a sentence —
+#: it is debris. Two is the smallest useful sentence in French ("Si.", "Va.")
+#: once punctuation is discounted, so anything under three letters or digits
+#: is a fragment that arrived from the source rather than from the prose.
+_MIN_SPEAKABLE = 3
+
+
+def _speakable(text: str) -> int:
+    return sum(1 for c in text if c.isalnum())
+
+
+def _absorb_fragments(segments: List[Segment]) -> List[Segment]:
+    """Fold debris into its neighbour instead of sending it to the engine.
+
+    An EPUB chapter can end on a stray ``-e``: a hyphenated word cut by the
+    file boundary, a stripped tag, a footnote marker. Alone, it is two
+    characters, and the engine given two characters does not fall silent — it
+    babbles for six times the expected duration, which the quality pass then
+    reports as a fatal defect. Regenerating never helps, because the fault is
+    the fragment, not the take: measured on one book, a re-roll turned 0.6s of
+    noise into 1.6s of it.
+
+    Merging costs nothing — the words are read in the same order either way —
+    and it removes the whole class of defect rather than one instance.
+    """
+    if len(segments) < 2:
+        return segments
+
+    out: List[Segment] = []
+    for seg in segments:
+        if _speakable(seg.text) < _MIN_SPEAKABLE and out:
+            previous = out[-1]
+            out[-1] = Segment(
+                text=f"{previous.text} {seg.text}".strip(),
+                # The fragment is now the tail, so the silence that followed it
+                # is the silence that follows the whole.
+                pause_after=seg.pause_after,
+                paragraph=previous.paragraph,
+            )
+        else:
+            out.append(seg)
+
+    # A leading fragment has no predecessor to join; give it its successor.
+    if len(out) > 1 and _speakable(out[0].text) < _MIN_SPEAKABLE:
+        head, following = out[0], out[1]
+        out[1] = Segment(
+            text=f"{head.text} {following.text}".strip(),
+            pause_after=following.pause_after,
+            paragraph=following.paragraph,
+        )
+        out = out[1:]
+    return out
 
 
 def split_into_segments(
@@ -144,7 +262,7 @@ def split_into_segments(
                     paragraph=paragraph_index,
                 )
             )
-    return segments
+    return _absorb_fragments(segments)
 
 
 def split_chapters(text: str, pattern: Optional[str] = None) -> List[str]:
