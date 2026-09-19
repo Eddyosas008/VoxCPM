@@ -199,15 +199,21 @@ class TestFile:
         """Le témoin : ``queue/queue.json`` telle qu'elle a tourné. Un seul
         livre y manque de couverture, et c'est celui dont le M4B n'en a
         aucune."""
-        books = json.loads((ROOT / "queue" / "queue.json").read_text(encoding="utf-8"))
+        chemin = ROOT / "queue" / "queue.json"
+        if not chemin.exists():
+            pytest.skip("queue/ est hors dépôt : la file réelle n'existe que "
+                        "sur la machine de narration")
+        books = json.loads(chemin.read_text(encoding="utf-8"))
         assert [slug for slug, _ in narrate_queue.couvertures_manquantes(books)] == [
             "livre-rebatir-intimite"
         ]
 
     def test_le_catalogue_courant_est_conforme(self):
-        books = json.loads(
-            (ROOT / "queue" / "queue_catalogue.json").read_text(encoding="utf-8")
-        )
+        chemin = ROOT / "queue" / "queue_catalogue.json"
+        if not chemin.exists():
+            pytest.skip("queue/ est hors dépôt : le catalogue n'existe que "
+                        "sur la machine de narration")
+        books = json.loads(chemin.read_text(encoding="utf-8"))
         assert narrate_queue.couvertures_manquantes(books) == []
 
     def test_le_pre_vol_vole_le_meme_plan(self, tmp_path):
