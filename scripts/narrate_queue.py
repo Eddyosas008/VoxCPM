@@ -143,6 +143,27 @@ def couvertures_manquantes(books: list[dict]) -> list[tuple[str, str]]:
     return manquantes
 
 
+def rapport_relecture(outdir: pathlib.Path) -> dict | None:
+    """Ce que la relecture a écrit, ou None si elle n'a pas pu tourner.
+
+    On lit le fichier plutôt que de compter des lignes de journal : le nombre
+    de segments réparés décide si le M4B est refait, et un marqueur textuel
+    qui change ferait livrer un livre sans ses corrections, en silence.
+    """
+    chemin = outdir / "relecture_report.json"
+    try:
+        rapport = json.loads(chemin.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rapport, dict) or not rapport.get("segments"):
+        # Zéro segment relu n'est pas une relecture : le plan et le cache ne
+        # se répondaient pas, et « 0 tronqué » ne dit rien du livre.
+        return None
+    rapport.setdefault("tronques", 0)
+    rapport.setdefault("repares", 0)
+    return rapport
+
+
 def livrables_absents(outdir: pathlib.Path, wavs: int) -> list[str]:
     """Ce qui manque à un livre pour être déposable, nommé.
 
@@ -170,6 +191,12 @@ def main() -> int:
     ap.add_argument("--qc-retries", default="2")
     ap.add_argument("--only", type=int, help="ne traiter que les N premiers")
     ap.add_argument("--skip-repair", action="store_true")
+    ap.add_argument("--sans-relecture", action="store_true",
+                    help="ne pas faire relire chaque segment par la reconnaissance vocale "
+                         "(la relecture trouve les segments qui s'arrêtent en route, "
+                         "invisibles au contrôle qualité, et les répare)")
+    ap.add_argument("--relecture-retries", default="2",
+                    help="essais par segment tronqué à la relecture (défaut : 2)")
     ap.add_argument("--audit", type=int, metavar="N", default=0,
                     help="relire N segments par livre avec la reconnaissance vocale et "
                          "cumuler les mots suspects dans queue/prononciation_a_valider.json "
@@ -310,6 +337,28 @@ def main() -> int:
                 elif rc != 0:
                     log(f"    réparation incomplète (code {rc})")
 
+        # Relecture : le contrôle qualité ne voit pas une phrase coupée en
+        # deux — débit normal, fin propre. Environ 2 % des segments. Seule une
+        # transcription dit jusqu'où le texte a été lu. Une relecture qui ne
+        # peut pas tourner (Whisper absent, GPU plein) est dite, jamais
+        # confondue avec une relecture qui n'a rien trouvé.
+        tronques = relus_repares = 0
+        if not args.sans_relecture:
+            log("    relecture par reconnaissance vocale")
+            rc, out = run([PYTHON, "scripts/relire_livre.py", str(outdir),
+                           "--device", args.device, "--repair",
+                           "--retries", str(args.relecture_retries)], blog)
+            rapport = rapport_relecture(outdir)
+            if rapport is None:
+                log(f"    relecture impossible (code {rc}) — livre gardé tel quel")
+            else:
+                tronques, relus_repares = rapport["tronques"], rapport["repares"]
+                restants = rapport.get("restants") or []
+                log(f"    {rapport['segments']} segment(s) relu(s), {tronques} tronqué(s), "
+                    f"{relus_repares} réparé(s)"
+                    + (f", {len(restants)} restant(s) : {', '.join(restants[:5])}"
+                       if restants else ""))
+
         # L'audit doit passer AVANT le balayage : il lit le cache de segments,
         # que --keep deliverables efface. Il cumule dans un classement unique —
         # trois cents rapports isolés ne seraient jamais relus, un seul l'est.
@@ -318,6 +367,23 @@ def main() -> int:
             run([PYTHON, "scripts/audit_pronunciation.py", str(outdir),
                  "--sample", str(args.audit), "--device", args.device,
                  "--merge", str(qpath.parent / "prononciation_a_valider.json")], blog)
+
+        # La narration a assemblé le M4B et exporté l'ACX *avant* la
+        # réparation et la relecture : les chapitres reconstruits ci-dessus
+        # n'y sont pas. Vingt-deux livres ont été livrés ainsi, leurs
+        # corrections restées dans des WAV que personne n'écoute. On relance
+        # donc la même commande : les chapitres existent, rien n'est
+        # synthétisé, seuls l'assemblage et l'export sont refaits.
+        if repaired or relus_repares:
+            log(f"    {repaired + relus_repares} segment(s) retouché(s) — "
+                "M4B et export ACX refaits depuis les chapitres")
+            rc, tail = run(cmd, blog)
+            if rc != 0:
+                log(f"    réassemblage échoué (code {rc}) — voir {blog.name}")
+                state[slug].update(status="failed", stage="réassemblage",
+                                   minutes=round(mins, 1), detail=tail[-400:])
+                save()
+                continue
 
         wavs = len(list(outdir.glob("*.wav"))) if outdir.is_dir() else 0
 
@@ -371,11 +437,13 @@ def main() -> int:
                 log(f"    WAV conservés : M4B ou export ACX manquant, rien n'est effacé")
 
         state[slug].update(status="done", minutes=round(mins, 1), chapters_wav=wavs,
-                           fatal_found=fatal,
-                           repaired=repaired, freed_gb=round(freed / 1e9, 2),
+                           fatal_found=fatal, repaired=repaired,
+                           truncated_found=tronques, truncated_repaired=relus_repares,
+                           freed_gb=round(freed / 1e9, 2),
                            finished=time.strftime("%Y-%m-%d %H:%M:%S"))
         save()
-        log(f"    terminé — {wavs} chapitre(s), {repaired} segment(s) réparé(s)")
+        log(f"    terminé — {wavs} chapitre(s), {repaired + relus_repares} segment(s) "
+            f"réparé(s)")
 
     done = sum(1 for v in state.values() if v.get("status") == "done")
     failed = [k for k, v in state.items() if v.get("status") == "failed"]
