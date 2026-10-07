@@ -31,7 +31,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -115,19 +115,14 @@ def main() -> int:
 
     # The model is loaded once, and only now: listing defects reads the cache
     # and must not cost a minute of model load.
-    demo = app.VoxCPMDemo(model_id=args.model_id, device=args.device, load_denoiser=False)
-    spec = plan.voice_spec()
+    # A cloned voice is checked before the model loads: refusing after a minute
+    # of model load would be the same refusal, later.
+    try:
+        repair.renderer(None, plan, "")
+    except repair.ReferenceUnavailable as error:
+        raise SystemExit(str(error))
 
-    def render(seed: Optional[int]) -> Tuple[int, "object"]:
-        sample_rate, wav, _ = demo.generate_tts_audio(
-            text_input=segment.text,
-            control_instruction=spec.description,
-            cfg_value_input=spec.cfg,
-            do_normalize=spec.normalize,
-            inference_timesteps=int(spec.steps),
-            seed=seed,
-        )
-        return sample_rate, wav
+    demo = app.VoxCPMDemo(model_id=args.model_id, device=args.device, load_denoiser=False)
 
     touched_chapters = set()
     failures = 0
@@ -146,7 +141,11 @@ def main() -> int:
             chapter_index,
             position,
             cache,
-            render,
+            # Rendered the way the book was: same description, same reference
+            # recording for a cloned voice. The old inline render passed no
+            # reference at all, which would have spoken the repaired sentence
+            # in another voice.
+            repair.renderer(demo, plan, segment.text),
             attempt=args.attempt,
             keep_worse=args.keep_worse,
         )

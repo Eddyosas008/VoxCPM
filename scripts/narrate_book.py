@@ -453,7 +453,11 @@ def main() -> int:
     # repairable — which is exactly the narration worth repairing rather than
     # running again.
     repair.BookPlan(
-        voice=dataclasses.asdict(voice_spec),
+        # The spec hashes the reference recording; a repair needs the recording
+        # itself, so its path travels beside the spec. Re-rolling a segment of a
+        # cloned voice without it would put a different voice in the chapter.
+        voice={**dataclasses.asdict(voice_spec),
+               "reference_path": str(args.reference_audio or "")},
         mastering=dataclasses.asdict(mastering),
         chapters=tuple(
             repair.PlannedChapter(

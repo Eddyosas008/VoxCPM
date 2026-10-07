@@ -38,11 +38,13 @@ __all__ = [
     "BookPlan",
     "PlannedChapter",
     "PlannedSegment",
+    "ReferenceUnavailable",
     "RepairResult",
     "chapter_path",
     "flagged_segments",
     "inspect_book",
     "rebuild_chapter",
+    "renderer",
     "reroll_segment",
     "segment_label",
 ]
@@ -162,6 +164,16 @@ class BookPlan:
             **{k: v for k, v in self.mastering.items() if k in known}
         )
 
+    def reference_path(self) -> str:
+        """Where the cloning recording was when the book was narrated.
+
+        The cache spec keeps only a content hash of that recording, which is
+        right for addressing and useless for re-rendering: a repair of a cloned
+        voice has to hand the engine the audio itself. Empty for a voice made
+        from a description, and for plans written before the path was kept.
+        """
+        return str(self.voice.get("reference_path") or "")
+
     def chapter(self, index: int) -> PlannedChapter:
         for chapter in self.chapters:
             if chapter.index == index:
@@ -194,6 +206,74 @@ def parse_label(label: str) -> Tuple[int, int]:
 
 def chapter_path(outdir: str | Path, index: int) -> Path:
     return Path(outdir) / f"chapitre_{index:03d}.wav"
+
+
+# --------------------------------------------------------------------------
+# Rendering a segment the way the book was rendered
+# --------------------------------------------------------------------------
+
+
+class ReferenceUnavailable(RuntimeError):
+    """The book was narrated in a cloned voice whose recording cannot be used.
+
+    Raised instead of rendering from the description alone, because that would
+    not repair the segment: it would replace it with the same sentence spoken
+    by a *different* voice — and the quality pass, which measures audio against
+    text, would never notice.
+    """
+
+
+def renderer(
+    demo, plan: BookPlan, text: str
+) -> Callable[[Optional[int]], Tuple[int, np.ndarray]]:
+    """The ``render(seed)`` callable for one segment, faithful to the plan.
+
+    ``demo`` is the engine wrapper (``app.VoxCPMDemo`` in production, a stub in
+    tests); only its ``generate_tts_audio`` is used, with the same arguments the
+    narration gave it. For a cloned voice that means the reference recording
+    and its transcript, checked against the content hash the cache recorded —
+    the same path can hold a different take tomorrow.
+    """
+    spec = plan.voice_spec()
+    reference_path: Optional[str] = None
+    if spec.reference:
+        candidate = plan.reference_path()
+        if not candidate:
+            raise ReferenceUnavailable(
+                "Ce livre a été narré dans une voix clonée, mais son plan ne dit pas où "
+                "est l'enregistrement de référence (plan écrit avant que ce chemin ne "
+                "soit conservé). Relancez narrate_book.py avec les mêmes arguments : les "
+                "segments viennent du cache, et le plan est réécrit avec le chemin."
+            )
+        if not Path(candidate).is_file():
+            raise ReferenceUnavailable(
+                f"Enregistrement de référence introuvable : {candidate}. Remettez-le à "
+                "cet emplacement (même contenu) avant de réparer."
+            )
+        actual = cache_tools.VoiceSpec.hash_reference(candidate)
+        if actual != spec.reference:
+            raise ReferenceUnavailable(
+                f"L'enregistrement {candidate} n'est plus celui de la narration "
+                f"(empreinte {actual} au lieu de {spec.reference}). Réparer avec un autre "
+                "enregistrement changerait la voix d'un segment au milieu du livre."
+            )
+        reference_path = candidate
+
+    def render(seed: Optional[int]) -> Tuple[int, np.ndarray]:
+        sample_rate, wav, _ = demo.generate_tts_audio(
+            text_input=text,
+            control_instruction=spec.description,
+            reference_wav_path_input=reference_path,
+            prompt_text=spec.reference_text if reference_path else "",
+            cfg_value_input=spec.cfg,
+            do_normalize=spec.normalize,
+            denoise=False,
+            inference_timesteps=int(spec.steps),
+            seed=seed,
+        )
+        return sample_rate, wav
+
+    return render
 
 
 # --------------------------------------------------------------------------
