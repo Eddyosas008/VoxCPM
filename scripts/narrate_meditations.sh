@@ -53,12 +53,21 @@ for txt in "${scripts[@]}"; do
   titre=$(echo "$slug" | sed -E 's/^[0-9]+_//; s/_/ /g')
   titre="$(echo "${titre:0:1}" | tr '[:lower:]' '[:upper:]')${titre:1}"
 
+  # Un MP3 de méditation n'a pas besoin de pochette, et le pré-vol refuse
+  # une absence non assumée : --no-cover, sauf si la série en fournit une.
+  if [ -n "${MEDITATIONS_COVER:-}" ]; then
+    cover=(--cover "$MEDITATIONS_COVER")
+  else
+    cover=(--no-cover)
+  fi
+
   echo "=== $slug (« $titre », voix : $VOICE) ==="
   if LANG=C.UTF-8 LC_ALL=C.UTF-8 "$PYTHON" scripts/narrate_book.py "$txt" \
       --voice "$VOICE" \
       --title "$titre" \
       --assemble mp3 \
       --no-credits \
+      "${cover[@]}" \
       --outdir "$outdir" \
       --device "$DEVICE"; then
     ok=$((ok + 1))
