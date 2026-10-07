@@ -23,9 +23,10 @@ What it does
 2. **Splits what is too long.** A chapter over the duration or size limit is cut
    into parts, in a pause rather than mid-word, each part shaped like a file of
    its own.
-3. **Extracts a retail sample** of 1 to 5 minutes from the first real chapter,
-   never from the credits: a sample is what a buyer decides on, and nobody
-   decides on hearing the title read out.
+3. **Extracts a retail sample** of 1 to 5 minutes from the book's introduction
+   when it has one, else from its first real chapter. Never the credits, never
+   the title page, never the dedication: a sample is what a buyer decides on,
+   and what decides them is the argument of the book, not its name read out.
 4. **Encodes to 192 kbps CBR MP3 at 44.1 kHz**, which needs ffmpeg.
 
 Without ffmpeg the first three steps still run, the WAVs are written, and the
@@ -104,6 +105,49 @@ def is_credit(title: str) -> bool:
     return title.strip() in (credits_tools.OPENING_TITLE, credits_tools.CLOSING_TITLE)
 
 
+#: What opens a book by explaining it. A buyer deciding on a sample wants the
+#: argument of the book, not its first anecdote and not its title page.
+_OPENING_MATTER = re.compile(
+    r"^\s*(introduction|avant[- ]propos|pr[ée]face|prologue|pr[ée]ambule)\b",
+    re.IGNORECASE,
+)
+
+#: Front matter that is read aloud but says nothing about the book: the title
+#: page, the dedication, the disclaimer.
+_FRONT_MATTER = re.compile(
+    r"^\s*(d[ée]dicace|avertissement|copyright|mentions)\b",
+    re.IGNORECASE,
+)
+
+
+def sample_chapter_index(titles: Sequence[str], book_title: str = "") -> Optional[int]:
+    """Which chapter the retail sample should come from, 1-based.
+
+    Taking the first non-credit chapter is what this did, and it picked the
+    title page: a buyer heard the book's own name read out and learnt nothing.
+    A sample has to let someone grasp what the book argues without giving the
+    book away, and that is exactly what an introduction is for.
+
+    So: the introduction if the book has one, otherwise the first chapter that
+    is neither a credit, nor front matter, nor the title page repeated.
+    """
+    ranked = list(enumerate(titles, 1))
+    for index, title in ranked:
+        if _OPENING_MATTER.match(title or ""):
+            return index
+
+    normalised = (book_title or "").strip().casefold()
+    for index, title in ranked:
+        clean = (title or "").strip()
+        if is_credit(clean) or _FRONT_MATTER.match(clean):
+            continue
+        if normalised and clean.casefold() == normalised:
+            continue
+        return index
+
+    return next((i for i, t in ranked if not is_credit(t or "")), None)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -121,7 +165,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sample-start", type=float, default=0.0,
                         help="Seconds into the chapter the sample starts (default: 0)")
     parser.add_argument("--sample-chapter", type=int,
-                        help="1-based chapter to sample (default: the first that is not a credit)")
+                        help="1-based chapter to sample (default: the introduction, else the first real chapter)")
     parser.add_argument("--keep-wav", action="store_true",
                         help="Keep the intermediate WAV of each delivered file")
     return parser
@@ -144,7 +188,10 @@ def encode(wav_path: Path, out_path: Path, ffmpeg: Optional[str]) -> Tuple[bool,
     if not ffmpeg:
         return False, command
     command[0] = ffmpeg
-    result = subprocess.run(command, capture_output=True, text=True)
+    # Comme à l'assemblage : ffmpeg renvoie les métadonnées du livre sur sa
+    # sortie d'erreur, et un shell sans LANG fait retomber Python sur l'ASCII.
+    result = subprocess.run(command, capture_output=True, text=True,
+                            encoding="utf-8", errors="replace")
     if result.returncode != 0:
         print(f"    échec de l'encodage : {result.stderr.strip().splitlines()[-1:]}")
         return False, command
@@ -187,6 +234,7 @@ def main() -> int:
     commands: List[List[str]] = []
     failures = 0
     sample_source: Optional[Tuple[np.ndarray, int, str]] = None
+    preferred_sample = sample_chapter_index(titles)
 
     for index, path in enumerate(chapter_paths, 1):
         title = titles[index - 1]
@@ -194,7 +242,7 @@ def main() -> int:
         data = audio_tools.as_float_mono(data)
         parts = delivery.split_for_delivery(data, sample_rate, profile)
 
-        wanted = args.sample_chapter == index if args.sample_chapter else not is_credit(title)
+        wanted = args.sample_chapter == index if args.sample_chapter else index == preferred_sample
         if sample_source is None and wanted:
             sample_source = (data, sample_rate, title)
 
@@ -280,7 +328,12 @@ def main() -> int:
             )
             print(f"Toutes les commandes sont dans {script}")
 
-    return 1 if failures else 0
+    # Des commandes qui restent, ce sont des MP3 qui n'existent pas : le
+    # dossier ne contient alors que des WAV et un `encoder.txt`, et rien ne
+    # peut être déposé. Sortir zéro là-dessus, c'est dire « livré » d'un
+    # dossier vide — sauf en --check, qui n'écrit rien par contrat.
+    reste_a_encoder = bool(commands) and not args.check
+    return 1 if (failures or reste_a_encoder) else 0
 
 
 if __name__ == "__main__":

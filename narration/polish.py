@@ -50,6 +50,7 @@ from . import audio as audio_tools
 __all__ = [
     "PolishSettings",
     "compress",
+    "expand_down",
     "deess",
     "highpass",
     "limit",
@@ -98,6 +99,24 @@ class PolishSettings:
     #: Never pull the band down by more than this, whatever the excess.
     deess_max_reduction_db: float = 8.0
 
+    #: Baisser le fond pendant les silences. Une voix clonée hérite du bruit de
+    #: sa référence : Alex Somerset rend un plancher à -58 dBFS là où Aurore est
+    #: à -70, et l'ACX refuse tout ce qui dépasse -60. Le bruit se concentre
+    #: dans 80-150 Hz, qui est aussi le fondamental d'une voix masculine, donc
+    #: un passe-haut plus haut amaigrirait la voix : il faut agir dans le temps,
+    #: pas en fréquence.
+    expand: bool = True
+    #: Seuil, relatif au niveau de parole du chapitre — comme la compression,
+    #: parce qu'un seuil absolu écraserait une prise forte et raterait une prise
+    #: faible.
+    expand_threshold_db: float = -30.0
+    expand_ratio: float = 2.5
+    #: Plafonner la réduction : un silence poussé à -100 dB s'entend comme un
+    #: trou, ce qui est un défaut d'un autre genre.
+    expand_max_reduction_db: float = 16.0
+    expand_attack_ms: float = 5.0
+    expand_release_ms: float = 220.0
+
     compress: bool = True
     #: Relative to the signal's own speech level, not an absolute dBFS value:
     #: the chapter arrives un-normalised and a fixed threshold would either do
@@ -117,7 +136,7 @@ class PolishSettings:
 
     @property
     def enabled(self) -> bool:
-        return bool(self.highpass_hz or self.deess or self.compress or self.limit)
+        return bool(self.highpass_hz or self.expand or self.deess or self.compress or self.limit)
 
 
 # --------------------------------------------------------------------------
@@ -287,6 +306,40 @@ def deess(
     return (low + _apply_control_gain(high, reduction, hop)).astype(np.float32)
 
 
+def expand_down(
+    wav: np.ndarray,
+    sr: int,
+    settings: PolishSettings = PolishSettings(),
+) -> np.ndarray:
+    """Pousser le fond vers le bas pendant les silences, sans toucher la voix.
+
+    Le seuil est relatif au niveau de parole du chapitre, comme pour la
+    compression. En dessous, le gain descend selon le rapport, plafonné : un
+    silence creusé à l'excès s'entend comme un trou, et un trou est un défaut
+    au même titre qu'un souffle.
+    """
+    wav = audio_tools.as_float_mono(wav)
+    if wav.size == 0 or not settings.expand:
+        return wav
+
+    envelope_db, hop = _control_envelope_db(wav, sr)
+    if envelope_db.size == 0:
+        return wav
+
+    speech_db = audio_tools.speech_rms_db(wav, sr)
+    if not np.isfinite(speech_db):
+        return wav
+    threshold = speech_db + settings.expand_threshold_db
+
+    deficit = np.maximum(0.0, threshold - envelope_db)
+    reduction = -deficit * (max(settings.expand_ratio, 1.0) - 1.0)
+    reduction = np.maximum(reduction, -abs(settings.expand_max_reduction_db))
+    reduction = _smooth_gain(
+        reduction, settings.expand_attack_ms, settings.expand_release_ms
+    )
+    return _apply_control_gain(wav, reduction, hop)
+
+
 def compress(
     wav: np.ndarray,
     sr: int,
@@ -445,6 +498,7 @@ def polish(
         return wav
     if settings.highpass_hz:
         wav = highpass(wav, sr, settings.highpass_hz)
+    wav = expand_down(wav, sr, settings)
     wav = deess(wav, sr, settings)
     wav = compress(wav, sr, settings)
     return limit(wav, sr, settings)

@@ -680,6 +680,36 @@ Désactiver globalement : `--no-text-prep` (script) ou décocher la case (interf
 | **Méditation guidée** | *Méditation guidée (grave & lente)* | `--pause-sentence 0.8 --pause-paragraph 1.6` |
 | **Podcast** | *Conteur jeune & dynamique* / *Narratrice chaleureuse & conversationnelle* | `--pause-paragraph 0.6` (rythme plus soutenu) |
 
+## Repères MindScript : des silences écrits dans le script
+
+Un script venu de MindScript Audio (ou écrit à la main dans son format) porte
+ses silences **dans le texte**, entre crochets. La chaîne les comprend
+nativement — `narration/cues.py` — et ils priment sur le plan de pauses :
+
+| Repère | Effet |
+|---|---|
+| `[PAUSE:BREATH]` ou `[RESPIRATION]` | 4 s de silence |
+| `[PAUSE:TRANSITION]` | 5 s |
+| `[PAUSE:INTEGRATION]` | 8 s |
+| `[PAUSE:DEEP]` | 10 s |
+| `[SILENCE 6]` (ou `6,5`, ou `6 s`) | la durée demandée, exacte |
+| `[RALENTIR]`, `[EMPHASE]`, `[TON …]` | retirés sans couper la phrase — jamais prononcés |
+
+Deux repères consécutifs s'additionnent ; un repère seul entre deux
+paragraphes remplace la pause de paragraphe (c'est le motif du disclaimer :
+`[PAUSE:DEEP]` sur sa propre ligne avant la dernière phrase). La préparation
+du texte protège les repères — le `6` de `[SILENCE 6]` n'est jamais épelé.
+
+Pour narrer une **série** de scripts (un `.txt` par séance, un MP3 par
+séance, reprise au segment près, une séance en échec n'arrête pas les
+autres) :
+
+```bash
+bash scripts/narrate_meditations.sh /workspace/meditations/serie-01
+# voix par défaut : « Aurore — méditation guidée » ; sinon :
+bash scripts/narrate_meditations.sh serie-01 "Méditation guidée (voix féminine)"
+```
+
 ## Cohérence de la voix sur un long texte
 
 La voix reste identique d'un segment à l'autre parce que **le même seed est réutilisé

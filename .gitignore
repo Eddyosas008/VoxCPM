@@ -15,3 +15,10 @@ assets/voices/
 
 # Archived generations
 output/
+
+# La file de production : textes narrables des manuscrits, couvertures, état
+# d'avancement, extraits d'écoute. Rien de tout cela n'a sa place dans un dépôt
+# public — ce sont les livres eux-mêmes, pas le moteur qui les lit. La file se
+# reconstruit depuis le catalogue avec scripts/construire_file.py.
+queue/
+temoin/

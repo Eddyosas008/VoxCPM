@@ -62,6 +62,8 @@ def build_epub(
             '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>'
         )
 
+    # Pas d'antislash dans une expression f-string : Python 3.10/3.11 le refuse.
+    spine_attrs = ' toc="ncx"' if ncx is not None else ""
     opf = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">'
@@ -69,7 +71,7 @@ def build_epub(
         f"<dc:title>{title}</dc:title><dc:creator>{author}</dc:creator>"
         "</metadata>"
         f"<manifest>{''.join(manifest_items)}</manifest>"
-        f'<spine{" toc=\"ncx\"" if ncx is not None else ""}>'
+        f"<spine{spine_attrs}>"
         f"{''.join(spine_items)}{spine_extra}</spine>"
         "</package>"
     )

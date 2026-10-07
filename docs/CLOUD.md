@@ -56,22 +56,62 @@ sur processeur**, soit un livre de 3 heures en moins d'une heure de calcul.
 
 Chez [RunPod](https://www.runpod.io/pricing), une RTX 4090 est à environ
 **0,34 $/h** en Community Cloud, facturée à la seconde. Un livre entier coûte donc
-moins qu'un café. Aucun engagement : on crée l'instance, on lance le script
-ci-dessus, on narre, on rapatrie, on détruit.
+moins qu'un café. Aucun engagement : on crée l'instance, on narre, on rapatrie,
+on détruit.
 
-```bash
-# sur la machine louée
-bash scripts/cloud_setup.sh
-nohup ./.venv/bin/python scripts/narrate_book.py livre.epub \
-    --voice "Narrateur profond & calme" --device cuda \
-    --assemble m4b --export-acx > narration.log 2>&1 &
+### Le volume persistant, qui rend la location à l'heure supportable
 
-# depuis chez soi, quand c'est fini
-rsync -avz root@<ip>:~/voxcpm/output/book_<nom>/ ./book_<nom>/
+Créer l'instance **avec un volume réseau** monté sur `/workspace`, une fois pour
+toutes. Sans lui, chaque livre recommence par 4,6 Go de modèle à télécharger et
+un environnement Python à construire — vingt minutes payées au tarif GPU, à
+chaque fois, pour retrouver un état identique au précédent.
+
+`cloud_setup.sh` s'installe de lui-même sur `/workspace` quand il en trouve un,
+et y place le cache Hugging Face à côté. Vingt gigaoctets suffisent (~1,4 $/mois)
+et le deuxième livre démarre en deux minutes au lieu de vingt.
+
+**Quelle carte ?** Le modèle tient dans 5 Go de VRAM : n'importe quelle carte à
+partir de 12 Go convient, et une RTX 4090 est déjà large. Le script choisit la
+roue PyTorch d'après la *compute capability* rapportée par le pilote, donc une
+carte Blackwell (RTX 5090) reçoit bien `cu128` et non `cu124` — avec lequel torch
+se charge, voit la carte, puis échoue au premier calcul.
+
+### Les quatre étapes d'un livre
+
+```powershell
+# 1. La machine, une fois créée (SSH selon l'IP et le port donnés par RunPod)
+ssh root@<ip> -p <port>
+curl -fsSL https://raw.githubusercontent.com/Eddyosas008/VoxCPM/claude/repo-analysis-improvement-dg0ies/scripts/cloud_setup.sh | bash
+
+# 2. Depuis votre poste : les voix clonées et le livre
+#    (assets/voices/ est hors du dépôt — voir plus bas)
+./scripts/gpu_session.ps1 push -RemoteHost <ip> -Port <port> -Book C:\livres\mon_livre.epub
+
+# 3. Sur la machine louée : narrer, sans surveillance
+source /workspace/voxcpm/env.sh
+nohup python scripts/narrate_book.py mon_livre.epub --device cuda \
+    --voice 'Aurore — livre audio' --assemble m4b --export-acx \
+    > narration.log 2>&1 &
+tail -f narration.log
+
+# 4. Depuis votre poste, quand c'est fini
+./scripts/gpu_session.ps1 pull -RemoteHost <ip> -Port <port> -Name mon_livre
 ```
 
 **Détruire l'instance en partant.** Elle est facturée tant qu'elle existe, même
-inactive.
+inactive — et vérifier le contenu rapatrié *avant* de détruire, pas après.
+
+### Les voix clonées ne voyagent pas avec le dépôt
+
+`assets/voices/` est dans le `.gitignore`, délibérément : ce sont des
+enregistrements de personnes réelles et le dépôt est public. Un clone frais a
+donc les quatorze voix de synthèse et **aucune des voix clonées** — leurs
+références pointent vers des fichiers absents, et l'échec ne se verrait qu'à la
+génération, sur un GPU facturé. `cloud_setup.sh` le signale à la fin de
+l'installation, et `gpu_session.ps1 push` envoie les 4,6 Mo qui manquent.
+
+`rsync` n'existe pas sur Windows : `gpu_session.ps1` s'appuie sur `scp`, livré
+avec OpenSSH. Sous Linux ou macOS, `rsync -avz` reste évidemment plus efficace.
 
 ## Route 3 — Kaggle, pour ne rien payer
 
@@ -102,6 +142,12 @@ Deux façons correctes :
 # sur votre poste
 ssh -N -L 8808:127.0.0.1:8808 root@<ip>
 # puis http://127.0.0.1:8808
+```
+
+Sous Windows, où le port de la machine louée n'est presque jamais 22 :
+
+```powershell
+./scripts/gpu_session.ps1 tunnel -RemoteHost <ip> -Port <port>
 ```
 
 **Un mot de passe**, si l'accès direct est nécessaire :
@@ -173,5 +219,9 @@ ce qui rend la location à l'heure économique.
 |---|---|---|---|
 | **VPS 2 cœurs** | ~3× plus lent qu'un portable | déjà payé | Permanence, stockage, tout le hors-synthèse |
 | **VPS 8 cœurs** | ~4× un portable | abonnement mensuel | Narration sans surveillance, sans louer |
-| **GPU à l'heure** | **~60× un portable** | ~0,34 $/h | Un livre entier en moins d'une heure |
+| **GPU à l'heure** | **~60× un portable** | ~0,34 $/h, soit ~0,35 $ le livre | Un livre entier en moins d'une heure |
 | **Kaggle** | GPU, sessions de 12 h | gratuit | Essais, et livres entiers avec un peu de patience |
+
+Le même GPU laissé allumé en permanence coûterait ~248 $/mois. À l'usage — un
+livre de temps en temps — la location à la demande revient donc environ deux
+cents fois moins cher, et c'est le volume persistant qui la rend praticable.

@@ -242,6 +242,15 @@ class TestValidateManifest:
         """validate subcommand must exit 1 on validation error (missing audio)."""
         import subprocess
 
+        probe = subprocess.run(
+            [sys.executable, "-c", "import voxcpm.cli"],
+            capture_output=True,
+            text=True,
+        )
+        if probe.returncode != 0:
+            pytest.skip("le paquet voxcpm (et torch) n'est pas installé : "
+                        "`python -m voxcpm.cli` est introuvable ici")
+
         manifest = tmp_dir / "bad.jsonl"
         _write_manifest(manifest, [{"text": "hi", "audio": "/nonexistent/x.wav"}])
 
