@@ -30,27 +30,12 @@ import json
 import pathlib
 import re
 import sys
-import unicodedata
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
-MODELE = "openai/whisper-large-v3-turbo"
-
-
-def mots(texte: str) -> list[str]:
-    return re.findall(r"[0-9A-Za-zÀ-ÿ''-]+", texte or "")
-
-
-def pliable(mot: str) -> str:
-    """Forme comparable : sans accent, sans casse, sans trait d'union.
-
-    Whisper ponctue et accentue à sa façon ; une différence d'accent n'est pas
-    une différence de prononciation, et compter les deux ferait crouler le
-    rapport sous du bruit.
-    """
-    plat = unicodedata.normalize("NFKD", mot.lower())
-    plat = "".join(c for c in plat if not unicodedata.combining(c))
-    return plat.replace("-", "").replace("'", "").replace("'", "")
+# Les jetons comparables et le transcripteur vivent avec la relecture, qui
+# fait le même travail segment par segment ; un seul endroit pour les deux.
+from narration.relecture import MODELE, mots, pliable, recoller_sigles, transcripteur_whisper  # noqa: E402,E501
 
 
 def charger_cache(directory: pathlib.Path) -> list[tuple[str, pathlib.Path]]:
@@ -74,56 +59,14 @@ def charger_cache(directory: pathlib.Path) -> list[tuple[str, pathlib.Path]]:
 
 def transcrire(paires, device: str):
     """Faire relire l'audio par Whisper, segment par segment."""
-    import numpy as np
     import soundfile as sf
-    import torch
-    from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
-    # Le pipeline() de transformers 5 décode l'audio via torchcodec, dont les
-    # DLL réclament un ffmpeg partagé. Le cache est en WAV : soundfile suffit,
-    # et rien ne dépend d'un binaire installé.
-    proc = WhisperProcessor.from_pretrained(MODELE)
-    modele = WhisperForConditionalGeneration.from_pretrained(MODELE).to(device).eval()
-
+    relire = transcripteur_whisper(device, MODELE)
     for i, (texte, chemin) in enumerate(paires, 1):
         x, sr = sf.read(str(chemin), dtype="float32")
-        if x.ndim > 1:
-            x = x.mean(axis=1)
-        if sr != 16000:  # Whisper n'accepte que 16 kHz
-            n = int(len(x) * 16000 / sr)
-            x = np.interp(np.linspace(0, len(x) - 1, n), np.arange(len(x)), x).astype("float32")
-        # Whisper se charge en demi-précision : lui donner du float32 lève
-        # « Input type (float) and bias type (c10::Half) should be the same ».
-        entrees = proc(x, sampling_rate=16000, return_tensors="pt").input_features
-        entrees = entrees.to(device=device, dtype=modele.dtype)
-        with torch.no_grad():
-            ids = modele.generate(entrees, language="fr", task="transcribe", max_new_tokens=440)
-        yield texte, proc.batch_decode(ids, skip_special_tokens=True)[0].strip()
+        yield texte, relire(sr, x)
         if i % 20 == 0:
             print(f"    {i}/{len(paires)} segments relus", flush=True)
-
-
-def recoller_sigles(jetons: list[str]) -> list[str]:
-    """« T. D. A. H. » redevient « TDAH ».
-
-    Un sigle correctement épelé revient de la transcription en lettres
-    séparées. C'est la bonne prononciation, écrite autrement ; le compter comme
-    une faute noierait le rapport sous les sigles qui vont bien.
-    """
-    sortie: list[str] = []
-    tampon: list[str] = []
-    for j in jetons + [""]:
-        if len(j) == 1 and j.isalpha():
-            tampon.append(j)
-            continue
-        if len(tampon) >= 2:
-            sortie.append("".join(tampon))
-        else:
-            sortie.extend(tampon)
-        tampon = []
-        if j:
-            sortie.append(j)
-    return sortie
 
 
 #: Mots que la méthode ne peut pas juger. Whisper corrige ce qu'il entend
