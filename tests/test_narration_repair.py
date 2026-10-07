@@ -327,3 +327,73 @@ def test_repair_then_rebuild_is_a_complete_cycle(plan, cache, tmp_path):
     result = repair.rebuild_chapter(plan, 1, cache, tmp_path)
     assert result.ok
     assert not repair.flagged_segments(repair.inspect_book(plan, cache))
+
+
+# --------------------------------------------------------------------------
+# Rendering the way the book was rendered
+# --------------------------------------------------------------------------
+
+
+class FakeDemo:
+    """Records what the engine was asked for."""
+
+    def __init__(self) -> None:
+        self.calls: list = []
+
+    def generate_tts_audio(self, **kwargs):
+        self.calls.append(kwargs)
+        return SR, speech(1.0), None
+
+
+def test_renderer_speaks_from_the_description_for_a_designed_voice(plan):
+    demo = FakeDemo()
+    repair.renderer(demo, plan, "Bonjour à tous.")(42)
+    call = demo.calls[0]
+    assert call["text_input"] == "Bonjour à tous."
+    assert call["control_instruction"] == "voix de test"
+    assert call["reference_wav_path_input"] is None and call["prompt_text"] == ""
+    assert call["seed"] == 42 and call["inference_timesteps"] == 10
+
+
+def test_renderer_hands_a_cloned_voice_its_recording(plan, tmp_path):
+    """The bug this guards against: a repair rendered from the description
+    alone put the repaired sentence in a *different* voice, and the quality
+    pass — audio against text — could not tell."""
+    reference = tmp_path / "ref.wav"
+    sf.write(str(reference), speech(2.0), SR)
+    plan.voice.update(
+        reference=cache_tools.VoiceSpec.hash_reference(reference),
+        reference_text="bonjour, ceci est une référence",
+        reference_path=str(reference),
+    )
+    demo = FakeDemo()
+    repair.renderer(demo, plan, "Texte")(1)
+    call = demo.calls[0]
+    assert call["reference_wav_path_input"] == str(reference)
+    assert call["prompt_text"] == "bonjour, ceci est une référence"
+    assert call["denoise"] is False
+
+
+def test_renderer_refuses_a_cloned_voice_whose_plan_has_no_path(plan):
+    plan.voice.update(reference="0123456789abcdef")
+    with pytest.raises(repair.ReferenceUnavailable, match="plan ne dit pas"):
+        repair.renderer(FakeDemo(), plan, "x")
+
+
+def test_renderer_refuses_a_missing_recording(plan, tmp_path):
+    plan.voice.update(reference="0123456789abcdef", reference_path=str(tmp_path / "parti.wav"))
+    with pytest.raises(repair.ReferenceUnavailable, match="introuvable"):
+        repair.renderer(FakeDemo(), plan, "x")
+
+
+def test_renderer_refuses_a_recording_that_changed(plan, tmp_path):
+    """Same path, other take: the content hash is what the cache trusted."""
+    reference = tmp_path / "ref.wav"
+    sf.write(str(reference), speech(2.0), SR)
+    plan.voice.update(reference="0000000000000000", reference_path=str(reference))
+    with pytest.raises(repair.ReferenceUnavailable, match="n'est plus celui"):
+        repair.renderer(FakeDemo(), plan, "x")
+
+
+def test_reference_path_is_empty_for_old_plans(plan):
+    assert plan.reference_path() == ""

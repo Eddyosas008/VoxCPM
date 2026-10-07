@@ -517,6 +517,50 @@ entrée du cache contient quelle phrase. Un livre narré avant que ce fichier ex
 se rattrape en relançant `narrate_book.py` avec les mêmes arguments : tout vient du
 cache, donc **c'est affaire de secondes** (mesuré : 23 s sur un livre déjà narré).
 
+Pour une **voix clonée**, la réparation rejoue le segment avec l'enregistrement de
+référence de la narration — le `plan.json` en garde le chemin, et le contenu est
+vérifié par empreinte. Si l'enregistrement a bougé ou changé, la réparation **refuse**
+plutôt que de glisser une phrase dans une autre voix au milieu du chapitre.
+
+## Relire le livre par reconnaissance vocale
+
+Le contrôle qualité mesure l'audio contre le texte. Il ne voit pas **une phrase coupée
+en deux** : débit normal, fin propre, niveau normal. Mesuré sur un livre narré, environ
+**2 % des segments** s'arrêtent avant la fin de leur texte, et aucun seuil acoustique ne
+les sépare des sains (les tronqués vont de 0,84× à 2,82× le débit médian, les sains
+montent à 1,84×). Seule une relecture tranche : on fait transcrire chaque segment par
+Whisper et on regarde **jusqu'où dans le texte** la transcription va.
+
+```
+.\.venv\Scripts\python.exe scripts\relire_livre.py output\book_mon_livre --device cuda
+.\.venv\Scripts\python.exe scripts\relire_livre.py output\book_mon_livre --device cuda --repair
+```
+
+La mesure est la **portée alignée** : la position du dernier mot du texte qu'un alignement
+ordonné retrouve dans ce qui a été entendu. Pas la couverture — Whisper écrit « 1980 »
+quand le texte dit « mille neuf cent quatre-vingts », et un mot répété en fin de texte
+faisait passer pour complet un segment coupé à 16 %. Un segment est tronqué quand il
+manque au moins trois mots en fin de texte *et* que la portée est sous 85 %, sur un
+segment d'au moins six mots : un dernier mot avalé par la transcription n'est pas une
+troncature.
+
+`--repair` régénère chaque segment tronqué avec une graine dérivée, le **relit**, et le
+garde s'il va cette fois au bout — sinon réessaie (`--retries`, 2 par défaut), et au
+pire garde la prise qui va le plus loin. Les chapitres touchés sont reconstruits depuis
+le cache. Le rapport est écrit dans `relecture_report.json` à côté des chapitres ; le code
+de sortie est 1 tant qu'il reste un segment tronqué.
+
+**Dans la file**, la relecture est faite d'office après chaque livre (`--sans-relecture`
+pour s'en passer), puis — et c'est ce qui manquait — le **M4B et l'export ACX sont refaits**
+quand un segment a été retouché, par la réparation comme par la relecture. Avant, les
+chapitres reconstruits restaient dans des WAV que personne n'assemblait, et le livre
+partait avec ses défauts. Une relecture qui ne peut pas tourner (Whisper absent) est dite
+dans le journal et ne bloque pas le livre.
+
+Coût : sur GPU, Whisper turbo relit un livre de trois heures en quelques minutes ; sur CPU
+il tourne à environ la moitié du temps réel, donc `--sample 40` pour se faire une idée.
+Le modèle (1,6 Go) est pré-téléchargé par `scripts/cloud_setup.sh`.
+
 ## Assemblage en un fichier unique
 
 ```

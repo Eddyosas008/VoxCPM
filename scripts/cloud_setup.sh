@@ -134,6 +134,17 @@ from huggingface_hub import snapshot_download
 path = snapshot_download("openbmb/VoxCPM2")
 print(f"    modèle dans {path}")
 PY
+    # The queue has every segment read back by Whisper (narration/relecture.py)
+    # to catch the ones that stop mid-sentence. 1,6 GB, fetched now rather than
+    # in the middle of the first book, where a slow download would be mistaken
+    # for a hung narration.
+    say "Reconnaissance vocale pour la relecture (≈1,6 Go)"
+    python - <<'PY'
+from huggingface_hub import snapshot_download
+
+path = snapshot_download("openai/whisper-large-v3-turbo")
+print(f"    Whisper dans {path}")
+PY
 fi
 
 # --- The cloned voices -----------------------------------------------------

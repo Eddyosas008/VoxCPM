@@ -19,6 +19,8 @@ Stages, in pipeline order::
     audio      trim, master and stitch the generated segments
     polish     high-pass, de-ess, compress, limit; and measure LUFS
     repair     re-roll one segment and restitch its chapter, from a saved plan
+    relecture  have a speech recogniser read each segment back, to catch the
+               ones that stop mid-sentence — invisible to ``quality``
     assemble   join chapters into a single MP3/M4B with chapter markers
     delivery   cut, sample and encode the files a distributor accepts
 """
@@ -33,6 +35,7 @@ __all__ = [
     "epub",
     "polish",
     "quality",
+    "relecture",
     "repair",
     "text_en",
     "text_fr",
