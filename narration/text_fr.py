@@ -726,6 +726,13 @@ def normalize_french(
     if not text or not text.strip():
         return ""
 
+    # Les repères MindScript ([PAUSE:BREATH], [SILENCE 6]…) traversent la
+    # préparation sous jeton : épeler le 6 de [SILENCE 6] en ferait un
+    # repère illisible pour le plan de pauses. Voir narration/cues.py.
+    from . import cues as _cues
+
+    text, _saved_cues = _cues.shield(text)
+
     text = _clean_typography(text)
     text = _clean_symbols(text)
     if strip_markdown:
@@ -743,7 +750,7 @@ def normalize_french(
     # After the markdown pass, so that a link's "(url)" is already gone.
     text = _flatten_parentheses(text)
     text = _clean_dialogue(text, strip_quotes)
-    return _tidy_whitespace(text)
+    return _cues.unshield(_tidy_whitespace(text), _saved_cues)
 
 
 def load_lexicon(path: str | Path) -> Dict[str, str]:

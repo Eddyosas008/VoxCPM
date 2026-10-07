@@ -20,6 +20,8 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional, Sequence
 
+from . import cues
+
 __all__ = [
     "DEFAULT_MAX_CHARS",
     "PauseProfile",
@@ -244,7 +246,13 @@ def split_into_segments(
     max_chars: int = DEFAULT_MAX_CHARS,
     profile: PauseProfile = PauseProfile(),
 ) -> List[Segment]:
-    """Segment a chapter and decide how long the silence after each part is."""
+    """Segment a chapter and decide how long the silence after each part is.
+
+    A MindScript cue (``[PAUSE:BREATH]``, ``[SILENCE 6]`` — see
+    :mod:`narration.cues`) overrides the profile for the segment it follows:
+    the author measured that silence, the profile only guesses it. Cues never
+    reach the engine.
+    """
     text = (text or "").strip()
     if not text:
         return []
@@ -252,16 +260,39 @@ def split_into_segments(
     paragraphs = [p.strip() for p in _PARAGRAPH_SPLIT_RE.split(text) if p.strip()]
     segments: List[Segment] = []
     for paragraph_index, paragraph in enumerate(paragraphs):
-        chunks = _pack_sentences(paragraph, max_chars)
-        for chunk_index, chunk in enumerate(chunks):
-            ends_paragraph = chunk_index == len(chunks) - 1
-            segments.append(
-                Segment(
-                    text=chunk,
-                    pause_after=profile.for_segment(chunk, ends_paragraph),
-                    paragraph=paragraph_index,
-                )
+        runs = cues.split_on_cues(paragraph)
+        if not runs:
+            # Paragraph made only of cues: the author measured the gap that
+            # follows what was said last — their figure replaces the guess.
+            forced = sum(
+                cues.cue_seconds(m) or 0.0 for m in cues.CUE_RE.finditer(paragraph)
             )
+            if segments and forced > 0.0:
+                last = segments[-1]
+                segments[-1] = Segment(
+                    text=last.text,
+                    pause_after=forced,
+                    paragraph=last.paragraph,
+                )
+            continue
+        for run_index, (run_text, forced_pause) in enumerate(runs):
+            chunks = _pack_sentences(run_text, max_chars)
+            ends_paragraph = run_index == len(runs) - 1
+            for chunk_index, chunk in enumerate(chunks):
+                is_last_chunk = chunk_index == len(chunks) - 1
+                if is_last_chunk and forced_pause is not None:
+                    pause = forced_pause
+                else:
+                    pause = profile.for_segment(
+                        chunk, ends_paragraph and is_last_chunk
+                    )
+                segments.append(
+                    Segment(
+                        text=chunk,
+                        pause_after=pause,
+                        paragraph=paragraph_index,
+                    )
+                )
     return _absorb_fragments(segments)
 
 

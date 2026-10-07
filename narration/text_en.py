@@ -288,6 +288,12 @@ def normalize_english(
     if not text or not text.strip():
         return ""
 
+    # MindScript cues ([PAUSE:BREATH], [SILENCE 6]…) cross the preparation
+    # under a token: spelling out the 6 would break the pause plan's parser.
+    from . import cues as _cues
+
+    text, _saved_cues = _cues.shield(text)
+
     text = _clean_typography(text)
     if strip_markdown:
         text = _strip_markdown(text)
@@ -301,4 +307,4 @@ def normalize_english(
     text = _expand_percent(text)
     text = _expand_ordinal_marks(text)
     text = _expand_numbers(text, read_years=read_years)
-    return re.sub(r"[^\S\n]{2,}", " ", text).strip()
+    return _cues.unshield(re.sub(r"[^\S\n]{2,}", " ", text).strip(), _saved_cues)

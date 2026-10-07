@@ -99,15 +99,30 @@ switch ($Action) {
         if ($Book) {
             if (-not (Test-Path $Book)) { throw "Livre introuvable : $Book" }
             $leaf = Split-Path $Book -Leaf
-            Invoke-Checked scp ($scpOpts + @($Book, "${target}:$RemoteDir/$leaf")) 'Envoi du livre'
-            Write-Host ""
-            Write-Host "Sur la machine louée :" -ForegroundColor Green
-            Write-Host @"
+            if (Test-Path $Book -PathType Container) {
+                # Un dossier : une série de scripts (méditations, podcast…)
+                # envoyée entière, narrée séance par séance côté distant.
+                Invoke-Checked ssh ($sshOpts + @($target, "mkdir -p '$RemoteDir/series'")) 'mkdir série'
+                Invoke-Checked scp ($scpOpts + @('-r', $Book, "${target}:$RemoteDir/series/")) 'Envoi de la série'
+                Write-Host ""
+                Write-Host "Sur la machine louée :" -ForegroundColor Green
+                Write-Host @"
+  source $RemoteDir/env.sh
+  nohup bash scripts/narrate_meditations.sh 'series/$leaf' \
+      > meditations.log 2>&1 &
+"@
+            }
+            else {
+                Invoke-Checked scp ($scpOpts + @($Book, "${target}:$RemoteDir/$leaf")) 'Envoi du livre'
+                Write-Host ""
+                Write-Host "Sur la machine louée :" -ForegroundColor Green
+                Write-Host @"
   source $RemoteDir/env.sh
   nohup python scripts/narrate_book.py '$leaf' --device cuda \
       --voice 'Aurore — livre audio' --assemble m4b --export-acx \
       > narration.log 2>&1 &
 "@
+            }
         }
     }
 
