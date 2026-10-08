@@ -744,8 +744,12 @@ paragraphes remplace la pause de paragraphe (c'est le motif du disclaimer :
 `[PAUSE:DEEP]` sur sa propre ligne avant la dernière phrase). La préparation
 du texte protège les repères — le `6` de `[SILENCE 6]` n'est jamais épelé.
 
-Pour narrer une **série** de scripts (un `.txt` par séance, un MP3 par
-séance, reprise au segment près, une séance en échec n'arrête pas les
+Les scripts qui vivent **dans MindScript Audio** se narrent sans les copier à la
+main : `scripts/narrate_mindscript.py` va les chercher dans le compte, les narre
+et peut rapporter le MP3 dans l'app — voir `docs/MINDSCRIPT.md`.
+
+Pour narrer une **série** de scripts déjà en `.txt` (un `.txt` par séance, un MP3
+par séance, reprise au segment près, une séance en échec n'arrête pas les
 autres) :
 
 ```bash
