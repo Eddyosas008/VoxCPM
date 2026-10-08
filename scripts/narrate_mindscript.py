@@ -53,6 +53,33 @@ from narration import mindscript  # noqa: E402
 
 LEXIQUE_FR = "conf/pronunciation_fr.json"
 
+#: Les identifiants peuvent vivre ici plutôt que dans l'environnement : un
+#: fichier ``CLÉ=valeur`` par ligne, ignoré par git, lisible dans un éditeur.
+FICHIER_ENV_LOCAL = REPO / "conf" / "mindscript.local.env"
+
+
+def charger_env_local(chemin: pathlib.Path = FICHIER_ENV_LOCAL) -> list[str]:
+    """Poser dans l'environnement les ``MINDSCRIPT_*`` du fichier local.
+
+    L'environnement prime : une valeur déjà posée n'est pas écrasée. Rend
+    les noms chargés, pour pouvoir dire d'où vient l'accès.
+    """
+    charges: list[str] = []
+    try:
+        lignes = chemin.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        return charges
+    for ligne in lignes:
+        ligne = ligne.strip()
+        if not ligne or ligne.startswith("#") or "=" not in ligne:
+            continue
+        cle, valeur = ligne.split("=", 1)
+        cle, valeur = cle.strip(), valeur.strip().strip('"').strip("'")
+        if cle.startswith("MINDSCRIPT_") and valeur and not os.environ.get(cle):
+            os.environ[cle] = valeur
+            charges.append(cle)
+    return charges
+
 
 def log(msg: str) -> None:
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
@@ -124,9 +151,11 @@ def creer_client(args) -> mindscript.Client:
         client.connecter(args.email, args.password)
     elif not args.api_key:
         raise SystemExit(
-            "Aucun accès à MindScript : donnez MINDSCRIPT_API_KEY (lecture seule, "
-            "comptes Team/Enterprise) ou MINDSCRIPT_EMAIL + MINDSCRIPT_PASSWORD "
-            "(tout, dépôt compris)."
+            "Aucun accès à MindScript. Soit dans l'environnement, soit dans "
+            f"{FICHIER_ENV_LOCAL} (une ligne CLÉ=valeur par identifiant, fichier ignoré "
+            "par git) :\n"
+            "  MINDSCRIPT_EMAIL=...  et  MINDSCRIPT_PASSWORD=...   (tout, dépôt compris)\n"
+            "  ou MINDSCRIPT_API_KEY=...   (lecture seule, comptes Team/Enterprise)"
         )
     if args.upload and client.utilisateur is None:
         raise SystemExit("--upload demande une session (courriel + mot de passe) : "
@@ -184,10 +213,12 @@ def main() -> int:
             flux.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
+    charges = charger_env_local()
     args = build_parser().parse_args()
 
     client = creer_client(args)
-    log(f"MindScript : {args.base_url} ({client.mode})")
+    log(f"MindScript : {args.base_url} ({client.mode}"
+        + (f", identifiants lus dans {FICHIER_ENV_LOCAL.name}" if charges else "") + ")")
 
     scripts = client.scripts()
     if args.list or not (args.script or args.all):

@@ -18,7 +18,19 @@ Deux façons, et le script dit laquelle il emploie :
 | Peut | lire les scripts | lire les scripts, **déposer l'audio** |
 
 `MINDSCRIPT_URL` pointe sur une autre instance (`http://localhost:5000` pour l'app
-lancée en local). Rien n'est stocké : les variables d'environnement suffisent.
+lancée en local).
+
+Le plus simple est de poser les identifiants **une fois** dans
+`conf/mindscript.local.env` — un fichier `CLÉ=valeur` par ligne, **ignoré par git**,
+modèle dans `conf/mindscript.local.env.exemple` :
+
+```
+MINDSCRIPT_EMAIL=ton.courriel@exemple.fr
+MINDSCRIPT_PASSWORD=le mot de passe du site
+```
+
+Le script le lit au démarrage ; une variable déjà posée dans l'environnement prime.
+Sans fichier, les variables d'environnement font le même travail :
 
 ```powershell
 $env:MINDSCRIPT_EMAIL = "..." ; $env:MINDSCRIPT_PASSWORD = "..."
