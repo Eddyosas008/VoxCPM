@@ -22,3 +22,6 @@ output/
 # reconstruit depuis le catalogue avec scripts/construire_file.py.
 queue/
 temoin/
+
+# Identifiants MindScript (narrate_mindscript.py) — jamais versionnés
+conf/mindscript.local.env

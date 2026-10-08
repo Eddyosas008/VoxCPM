@@ -266,3 +266,30 @@ class TestAcces:
         args.api_key = None
         narrate_mindscript.creer_client(args)
         assert appels == [("new", "http://localhost:5000", None), ("login", "e@x", "p")]
+
+
+class TestFichierLocal:
+    """Les identifiants peuvent vivre dans conf/mindscript.local.env, ignoré
+    par git : ni dans une commande, ni dans une conversation."""
+
+    def test_le_fichier_local_pose_les_variables_manquantes(self, monkeypatch, tmp_path):
+        for cle in ("MINDSCRIPT_EMAIL", "MINDSCRIPT_PASSWORD", "MINDSCRIPT_API_KEY"):
+            monkeypatch.delenv(cle, raising=False)
+        monkeypatch.setenv("MINDSCRIPT_PASSWORD", "deja-la")
+        fichier = tmp_path / "mindscript.local.env"
+        fichier.write_text(
+            "# commentaire\nMINDSCRIPT_EMAIL = \"e@x.fr\"\nMINDSCRIPT_PASSWORD=autre\n"
+            "AUTRE_CHOSE=non\nMINDSCRIPT_API_KEY=\n", encoding="utf-8")
+        charges = narrate_mindscript.charger_env_local(fichier)
+        assert charges == ["MINDSCRIPT_EMAIL"]
+        assert narrate_mindscript.os.environ["MINDSCRIPT_EMAIL"] == "e@x.fr"
+        assert narrate_mindscript.os.environ["MINDSCRIPT_PASSWORD"] == "deja-la"  # l'environnement prime
+        assert "AUTRE_CHOSE" not in narrate_mindscript.os.environ
+
+    def test_sans_fichier_rien_ne_casse(self, tmp_path):
+        assert narrate_mindscript.charger_env_local(tmp_path / "absent.env") == []
+
+    def test_le_fichier_local_est_ignore_par_git(self):
+        ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+        assert "conf/mindscript.local.env" in ignore
+        assert (ROOT / "conf" / "mindscript.local.env.exemple").exists()
