@@ -39,12 +39,16 @@ PAUSE_SECONDS = {
 
 DEFAULT_PAUSE_SECONDS = 3.0
 
-#: Les quatre formes que MindScript écrit réellement. ``TON`` avale son
-#: complément (« TON PLUS GRAVE ») ; ``SILENCE`` accepte une virgule décimale
-#: et un « s » d'unité, parce que les scripts sont écrits à la main.
+#: Les formes que MindScript écrit réellement. ``TON`` avale son complément
+#: (« TON PLUS GRAVE ») ; ``SILENCE`` accepte une virgule décimale et un « s »
+#: d'unité, parce que les scripts sont écrits à la main. ``[PAUSE]`` nu et
+#: ``[PAUSE 5]`` sont les formes des scripts générés avant les repères nommés
+#: — l'app leur donne trois secondes et la durée demandée ; un ``[PAUSE]``
+#: qui ne serait pas reconnu serait lu « pause » au milieu d'une méditation.
 CUE_RE = re.compile(
     r"\[\s*(?:"
     r"PAUSE\s*:\s*(?P<pause>[A-ZÀ-Ü]+)"
+    r"|(?P<bare>PAUSE)(?:\s+(?P<pause_seconds>\d+(?:[.,]\d+)?)(?:\s*S)?)?"
     r"|SILENCE\s+(?P<seconds>\d+(?:[.,]\d+)?)(?:\s*S)?"
     r"|(?P<breath>RESPIRATION)"
     r"|(?P<direction>RALENTIR|EMPHASE|TON\s[^\]]*)"
@@ -64,6 +68,9 @@ def cue_seconds(match: "re.Match[str]") -> Optional[float]:
         return float(match.group("seconds").replace(",", "."))
     if match.group("breath") is not None:
         return PAUSE_SECONDS["BREATH"]
+    if match.group("bare") is not None:
+        asked = match.group("pause_seconds")
+        return float(asked.replace(",", ".")) if asked else DEFAULT_PAUSE_SECONDS
     return PAUSE_SECONDS.get(match.group("pause").upper(), DEFAULT_PAUSE_SECONDS)
 
 
