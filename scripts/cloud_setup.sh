@@ -6,7 +6,7 @@
 # GPU rather than by asking. Run it twice and it changes nothing the second
 # time: every step checks before it acts.
 #
-#   curl -fsSL https://raw.githubusercontent.com/Eddyosas008/VoxCPM/claude/repo-analysis-improvement-dg0ies/scripts/cloud_setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/Eddyosas008/VoxCPM/main/scripts/cloud_setup.sh | bash
 #
 # or, once the repository is already there:
 #
@@ -14,7 +14,7 @@
 #
 # Environment:
 #   VOXCPM_DIR     where to install            (default: ~/voxcpm, or /workspace/voxcpm)
-#   VOXCPM_BRANCH  branch to check out         (default: claude/repo-analysis-improvement-dg0ies)
+#   VOXCPM_BRANCH  branch to check out         (default: main)
 #   VOXCPM_REPO    repository to clone         (default: this fork)
 #   HF_HOME        where the model is cached   (default: beside the install)
 #   SKIP_MODEL=1   do not pre-download the model
@@ -31,7 +31,7 @@ elif [ -d /workspace ] && [ -w /workspace ]; then
 else
     DIR="$HOME/voxcpm"
 fi
-BRANCH="${VOXCPM_BRANCH:-claude/repo-analysis-improvement-dg0ies}"
+BRANCH="${VOXCPM_BRANCH:-main}"
 REPO="${VOXCPM_REPO:-https://github.com/Eddyosas008/VoxCPM.git}"
 
 # The model is 4,6 GB. Cached next to the install, it is downloaded once for
