@@ -66,7 +66,7 @@ import app  # noqa: E402
 from narration import assemble as assembly  # noqa: E402
 from narration import audio as audio_tools  # noqa: E402
 from narration import cache as cache_tools  # noqa: E402
-from narration import chunking, couverture, credits, epub, quality, repair, text_en, text_fr  # noqa: E402
+from narration import chunking, couverture, credits, epub, modele, quality, repair, text_en, text_fr  # noqa: E402
 
 #: Rough characters-per-second of finished narration, used only to estimate how
 #: long a book will run before committing hours of CPU to it.
@@ -189,6 +189,10 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--outdir", help="Output directory (default: output/book_<filename>)")
     run.add_argument("--device", default="cpu", help="auto, cpu, mps, cuda, or cuda:N (default: cpu)")
     run.add_argument("--model-id", default="openbmb/VoxCPM2", help="Model path or HF repo id")
+    run.add_argument("--model-online", action="store_true",
+                     help="Résoudre le modèle sur le hub plutôt que vers la révision "
+                          "complète du cache local — c'est ainsi qu'on adopte une "
+                          "nouvelle révision, jamais par surprise")
     run.add_argument("--force", action="store_true", help="Regenerate chapters even if their .wav exists")
     run.add_argument("--no-cache", action="store_true", help="Do not cache or reuse generated segments")
     run.add_argument("--dry-run", action="store_true", help="Show the plan, generate nothing")
@@ -364,6 +368,11 @@ def main() -> int:
     else:
         print(f"Voix        : {args.voice or '(personnalisée)'} | seed={seed}")
     print(f"Préparation : {'désactivée' if args.no_text_prep else f'française ({len(lexicon)} entrée(s) de lexique)'}")
+    # Résolu ici, au pré-vol : trois narrations sont mortes au chargement
+    # parce que le hub avait une révision plus neuve et le réseau a lâché en
+    # la téléchargeant, la révision complète dormant dans le cache à côté.
+    modele_resolu = modele.resoudre(args.model_id, en_ligne=args.model_online)
+    print(f"Modèle      : {args.model_id} — {modele_resolu.describe()}")
     print(f"Chapitres   : {len(chapters)} | segments : {total_segments} | caractères : {total_chars}")
     print(f"Durée estimée : ~{total_chars / _CHARS_PER_SECOND / 60:.0f} min de narration")
     if args.no_credits:
@@ -476,7 +485,10 @@ def main() -> int:
     thresholds = quality.QualityThresholds()
     qc_reports: list[tuple[str, quality.SegmentReport]] = []
 
-    demo = app.VoxCPMDemo(model_id=args.model_id, device=args.device, load_denoiser=False)
+    # Le cache de segments garde l'identifiant tel que donné (`model_id` dans
+    # la spec), pas le chemin résolu : la clé ne doit pas changer parce que le
+    # cache Hugging Face a déménagé.
+    demo = app.VoxCPMDemo(model_id=modele_resolu.chemin, device=args.device, load_denoiser=False)
     print(f"\nDébut de la narration à {time.strftime('%H:%M:%S')} (device={args.device}). "
           f"C'est lent sur CPU.\n", flush=True)
 

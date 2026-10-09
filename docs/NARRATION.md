@@ -55,6 +55,17 @@ narration reprenable : voir plus bas.
    ```
    Le modèle demande ~8 Go de VRAM.
 
+### Le modèle : la révision du cache, jamais une autre par surprise
+
+`--model-id openbmb/VoxCPM2` se résout d'abord vers la **révision complète présente
+dans le cache Hugging Face** (le pré-vol l'affiche : « révision bffb3df en cache local,
+sans réseau »). On ne va sur le hub que si le cache n'a rien, ou avec `--model-online`.
+Deux raisons, apprises le même soir : trois narrations sont mortes au chargement parce
+que le hub avait une révision plus neuve et que le réseau a lâché en téléchargeant ses
+4,6 Go, la révision complète dormant à côté ; et une nouvelle révision du modèle
+**change les quatorze voix décrites** sans que la clé du cache de segments le sache.
+Adopter une nouvelle révision est une décision : `--model-online`, une fois, exprès.
+
 ### Vitesse CPU : float32 par défaut (~1,5× plus rapide)
 
 Sur CPU, le `bfloat16` du checkpoint est **émulé** et lent. Ce fork force donc
