@@ -8,7 +8,7 @@ Une seule commande les prépare toutes les trois, parce que la seule chose qui l
 distingue est la présence d'un GPU, et le script la détecte au lieu de la demander :
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Eddyosas008/VoxCPM/claude/repo-analysis-improvement-dg0ies/scripts/cloud_setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Eddyosas008/VoxCPM/main/scripts/cloud_setup.sh | bash
 ```
 
 Il installe les paquets système, clone le dépôt, choisit la roue PyTorch adaptée
@@ -81,7 +81,7 @@ se charge, voit la carte, puis échoue au premier calcul.
 ```powershell
 # 1. La machine, une fois créée (SSH selon l'IP et le port donnés par RunPod)
 ssh root@<ip> -p <port>
-curl -fsSL https://raw.githubusercontent.com/Eddyosas008/VoxCPM/claude/repo-analysis-improvement-dg0ies/scripts/cloud_setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Eddyosas008/VoxCPM/main/scripts/cloud_setup.sh | bash
 
 # 2. Depuis votre poste : les voix clonées et le livre
 #    (assets/voices/ est hors du dépôt — voir plus bas)
