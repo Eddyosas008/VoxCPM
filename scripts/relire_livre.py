@@ -39,7 +39,7 @@ from typing import Dict, List, Optional, Tuple
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from narration import cache as cache_tools  # noqa: E402
-from narration import relecture, repair  # noqa: E402
+from narration import modele, relecture, repair  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -185,7 +185,9 @@ def main() -> int:
 
         import app  # noqa: E402 - torch, seulement maintenant
 
-        demo = app.VoxCPMDemo(model_id=args.model_id, device=args.device, load_denoiser=False)
+        resolu = modele.resoudre(args.model_id)
+        print(f"Modèle      : {args.model_id} — {resolu.describe()}")
+        demo = app.VoxCPMDemo(model_id=resolu.chemin, device=args.device, load_denoiser=False)
         touches = set()
         for v in tronques:
             print(f"\n{v.label} — réparation")

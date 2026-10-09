@@ -10,6 +10,7 @@ Stages, in pipeline order::
 
     epub       read an .epub into the plain chapters everything else expects
     mindscript fetch scripts from a MindScript Audio account, send audio back
+    modele     resolve the model to the complete cached revision, never a surprise
     credits    the opening and closing credits distributors require
     voices     the catalogue of narration voices, designed or cloned
     text_fr    prepare raw French prose for a TTS engine
@@ -35,6 +36,7 @@ __all__ = [
     "delivery",
     "epub",
     "mindscript",
+    "modele",
     "polish",
     "quality",
     "relecture",

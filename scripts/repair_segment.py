@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import app  # noqa: E402
 from narration import cache as cache_tools  # noqa: E402
-from narration import quality, repair  # noqa: E402
+from narration import modele, quality, repair  # noqa: E402
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -122,7 +122,9 @@ def main() -> int:
     except repair.ReferenceUnavailable as error:
         raise SystemExit(str(error))
 
-    demo = app.VoxCPMDemo(model_id=args.model_id, device=args.device, load_denoiser=False)
+    resolu = modele.resoudre(args.model_id)
+    print(f"Modèle      : {args.model_id} — {resolu.describe()}")
+    demo = app.VoxCPMDemo(model_id=resolu.chemin, device=args.device, load_denoiser=False)
 
     touched_chapters = set()
     failures = 0

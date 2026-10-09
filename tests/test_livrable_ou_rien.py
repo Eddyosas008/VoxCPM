@@ -140,10 +140,14 @@ class TestNarrateBook:
         """Le cas qui a coûté un volume saturé : lancé depuis le mauvais
         dossier, le script ne trouvait aucun chapitre, sortait zéro, et la
         purge des WAV — conditionnée à ce compte — ne se déclenchait pas."""
+        # `Path.glob` est patché sur la classe : la version d'origine doit
+        # être capturée avant, sinon tout autre glob du pré-vol (celui qui
+        # cherche le modèle en cache, par exemple) rappelle le patch sans fin.
+        vrai_glob = Path.glob
         monkeypatch.setattr(
             narrate_book.Path, "glob",
             lambda self, motif: iter(()) if motif == "chapitre_*.wav"
-            else Path.glob(self, motif),
+            else vrai_glob(self, motif),
         )
         code = _narrer(monkeypatch, livre, tmp_path)
         assert code == 1
