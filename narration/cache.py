@@ -30,7 +30,28 @@ import soundfile as sf
 __all__ = ["CacheStats", "ChunkCache", "VoiceSpec"]
 
 #: Bumped when a change to generation would make existing entries wrong.
-CACHE_VERSION = 1
+#: 2: the runtime precision joined the key — a float32 narration had reused
+#: segments rendered in bfloat16 without a word, and they do not sound alike.
+CACHE_VERSION = 2
+
+
+def runtime_dtype_label(device: str, env: Optional[dict] = None) -> str:
+    """The precision the engine will actually compute in, as a stable label.
+
+    Mirrors ``voxcpm.model.utils.pick_runtime_dtype`` without importing torch:
+    CPU and MPS compute in float32 unless ``VOXCPM_CPU_DTYPE`` /
+    ``VOXCPM_MPS_DTYPE`` opts back into a lower precision; CUDA keeps the
+    checkpoint's own dtype, named ``"checkpoint"`` here so the label does not
+    depend on which checkpoint is loaded. Same seed, different precision,
+    different audio — so this belongs in the cache key.
+    """
+    env = os.environ if env is None else env
+    device = (device or "cpu").lower()
+    var = {"cpu": "VOXCPM_CPU_DTYPE", "mps": "VOXCPM_MPS_DTYPE"}.get(device.split(":")[0])
+    if var is None:
+        return "checkpoint"
+    override = (env.get(var) or "").strip().lower()
+    return override or "float32"
 
 
 @dataclass(frozen=True)
@@ -58,6 +79,9 @@ class VoiceSpec:
     #: The transcript given alongside that recording, which also changes the
     #: result.
     reference_text: str = ""
+    #: The precision the engine computed in (see :func:`runtime_dtype_label`).
+    #: Empty for specs written before it was recorded.
+    dtype: str = ""
 
     @staticmethod
     def hash_reference(path) -> str:

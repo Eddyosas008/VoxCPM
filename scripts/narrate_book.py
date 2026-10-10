@@ -450,6 +450,8 @@ def main() -> int:
         # different recording that happened to live at the same path.
         reference=cache_tools.VoiceSpec.hash_reference(args.reference_audio),
         reference_text=(args.reference_text or "").strip(),
+        # Same seed in bfloat16 and in float32 are two different takes.
+        dtype=cache_tools.runtime_dtype_label(args.device),
     )
     cache = cache_tools.ChunkCache(outdir / ".cache", enabled=not args.no_cache)
     mastering = audio_tools.MasteringSettings(
