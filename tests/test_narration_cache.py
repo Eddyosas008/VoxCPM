@@ -118,3 +118,22 @@ class TestMaintenance:
         assert cache.size_bytes() == 0
         cache.put(cache.key("un", voice), SR, audio_block(length=48000))
         assert cache.size_bytes() > 0
+
+
+class TestLaPrecisionFaitPartieDeLaCle:
+    """Une narration en float32 avait réutilisé des segments rendus en
+    bfloat16 : même graine, même texte, même clé — et un autre son."""
+
+    def test_deux_precisions_sont_deux_cles(self):
+        from narration.cache import VoiceSpec
+        a = VoiceSpec(seed=1, dtype="float32")
+        b = VoiceSpec(seed=1, dtype="bfloat16")
+        assert a.fingerprint() != b.fingerprint()
+
+    def test_le_label_suit_la_politique_du_moteur(self):
+        from narration.cache import runtime_dtype_label
+        assert runtime_dtype_label("cpu", {}) == "float32"
+        assert runtime_dtype_label("cpu", {"VOXCPM_CPU_DTYPE": "bfloat16"}) == "bfloat16"
+        assert runtime_dtype_label("mps", {"VOXCPM_MPS_DTYPE": " Float16 "}) == "float16"
+        assert runtime_dtype_label("cuda", {"VOXCPM_CPU_DTYPE": "bfloat16"}) == "checkpoint"
+        assert runtime_dtype_label("cuda:1", {}) == "checkpoint"
