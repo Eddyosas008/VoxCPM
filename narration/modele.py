@@ -29,9 +29,12 @@ from typing import List, Optional
 __all__ = ["Resolution", "cache_hub", "resoudre", "snapshots_complets"]
 
 #: Ce qu'un snapshot doit contenir pour qu'on puisse charger le modèle sans
-#: rien télécharger. Les poids d'abord — c'est eux qui manquaient.
+#: rien télécharger. Les poids du modèle lui-même, par leur nom exact — ceux
+#: que ``VoxCPM.from_pretrained`` cherche. Un motif large (« n'importe quel
+#: .pth ») a déclaré complet un snapshot qui n'avait que ``audiovae.pth``,
+#: et cinq réparations ont échoué dessus.
 _REQUIS = ("config.json",)
-_POIDS = ("*.safetensors", "*.bin", "*.pth")
+_POIDS = ("model.safetensors", "pytorch_model.bin")
 
 
 def cache_hub(env: Optional[dict] = None) -> Path:
@@ -65,7 +68,7 @@ class Resolution:
 def _complet(snapshot: Path) -> bool:
     if not all((snapshot / f).is_file() for f in _REQUIS):
         return False
-    return any(any(snapshot.glob(motif)) for motif in _POIDS)
+    return any((snapshot / nom).is_file() for nom in _POIDS)
 
 
 def snapshots_complets(repo_id: str, cache: Optional[Path] = None) -> List[Path]:
@@ -78,7 +81,7 @@ def snapshots_complets(repo_id: str, cache: Optional[Path] = None) -> List[Path]
     complets = [s for s in dossier.iterdir() if s.is_dir() and _complet(s)]
 
     def recence(s: Path) -> float:
-        poids = [p for motif in _POIDS for p in s.glob(motif)]
+        poids = [s / nom for nom in _POIDS if (s / nom).is_file()]
         return max((p.stat().st_mtime for p in poids), default=0.0)
 
     return sorted(complets, key=recence, reverse=True)

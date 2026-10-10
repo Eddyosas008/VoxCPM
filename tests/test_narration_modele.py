@@ -150,3 +150,22 @@ class TestDansNarrateBook:
         assert recus == [str(snapshot)]
         # La clé du cache de segments ne bouge pas avec l'emplacement du cache.
         assert repair.BookPlan.load(tmp_path / "out").voice["model_id"] == "openbmb/VoxCPM2"
+
+
+def test_un_snapshot_qui_na_que_le_vocodeur_nest_pas_complet(cache):
+    """Le cas réel : la nouvelle révision avait téléchargé audiovae.pth et le
+    reste, mais pas model.safetensors (4,6 Go) quand le réseau a lâché. Un
+    motif large l'a déclarée complète, et cinq réparations sont mortes dessus
+    avec « Model file not found »."""
+    _snapshot(cache, COMPLET, poids=True, age=86400)
+    neuf = _snapshot(cache, INCOMPLET, poids=False)
+    (neuf / "audiovae.pth").write_bytes(b"\x00" * 16)
+    assert modele.resoudre(REPO, cache).revision == COMPLET
+
+
+def test_pytorch_model_bin_compte_aussi(cache):
+    s = cache / "models--openbmb--VoxCPM2" / "snapshots" / ("c" * 40)
+    s.mkdir(parents=True)
+    (s / "config.json").write_text("{}", encoding="utf-8")
+    (s / "pytorch_model.bin").write_bytes(b"\x00")
+    assert modele.resoudre(REPO, cache).origine == "cache"
