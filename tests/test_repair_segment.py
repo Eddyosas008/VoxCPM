@@ -156,3 +156,31 @@ class TestRepairing:
     def test_nothing_happens_without_a_target(self, monkeypatch, narrated, capsys):
         assert repair_run(monkeypatch, narrated) == 0
         assert "Rien à faire" in capsys.readouterr().out
+
+
+class TestRepairingByCode:
+    """``--codes`` reaches suspect defects, which ``--all-fatal`` leaves alone."""
+
+    def test_nothing_flagged_means_no_model_load(self, monkeypatch, narrated, capsys):
+        monkeypatch.setattr(
+            repair_segment.app, "VoxCPMDemo", lambda **_: pytest.fail("model loaded")
+        )
+        assert repair_run(monkeypatch, narrated, "--codes", "abrupt_end") == 0
+        assert "rien à régénérer" in capsys.readouterr().out
+
+    def test_a_suspect_abrupt_end_is_regenerated(self, monkeypatch, narrated, capsys):
+        from narration import quality
+
+        coupe = quality.Issue("abrupt_end", quality.SUSPECT, "coupé net")
+        reel = repair.flagged_segments
+
+        def avec_une_fin_coupee(reports):
+            premier, rapport = reports[0]
+            autres = [(label, r) for label, r in reel(reports) if label != premier]
+            faux = type(rapport)(**{**rapport.__dict__, "issues": (coupe,)})
+            return [(premier, faux), *autres]
+
+        monkeypatch.setattr(repair, "flagged_segments", avec_une_fin_coupee)
+        assert repair_run(monkeypatch, narrated, "--codes", "abrupt_end,truncated") == 0
+        assert len(CALLS) == 1
+        assert "reconstruit" in capsys.readouterr().out

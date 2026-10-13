@@ -6,6 +6,11 @@ sans rien d'abîmé : un second essai, la mémoire revenue, passe) puis laissée
 pour la suivante — une séance en échec n'arrête jamais la série. Le cache de
 ``narrate_book.py`` fait reprendre une séance interrompue au segment près.
 
+Une séance rendue passe ensuite par ``repair_segment.py --codes`` : les
+segments à fin coupée (``abrupt_end``, défaut que le contrôle laisse passer
+comme simple suspicion) sont régénérés, puis la séance est réassemblée depuis
+le cache. ``--reparer ""`` coupe cette étape.
+
 Chaque MP3 fini est recopié à côté de son script, là où on l'écoute.
 
     python scripts/narrer_serie.py "C:/.../serie-02-anxiete" --device cpu
@@ -68,6 +73,17 @@ def commande(txt: pathlib.Path, outdir: pathlib.Path, titre: str, args) -> List[
     return cmd
 
 
+def reparer(outdir: pathlib.Path, journal: pathlib.Path, args, env) -> bool:
+    """Régénère les segments signalés par ``args.reparer`` ; vrai si un a changé."""
+    cmd = [sys.executable, str(REPO / "scripts" / "repair_segment.py"), str(outdir),
+           "--codes", args.reparer, "--device", args.device]
+    sortie = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            cwd=REPO, env=env, text=True, encoding="utf-8", errors="replace")
+    with journal.open("a", encoding="utf-8") as fh:
+        fh.write(f"\n=== réparation {args.reparer}\n{sortie.stdout or ''}")
+    return "reconstruit" in (sortie.stdout or "")
+
+
 def main() -> int:
     for flux in (sys.stdout, sys.stderr):
         try:
@@ -87,6 +103,8 @@ def main() -> int:
                     help="essais par séance avant de passer à la suivante (défaut : 3)")
     ap.add_argument("--attente", type=float, default=60.0,
                     help="secondes d'attente entre deux essais (défaut : 60)")
+    ap.add_argument("--reparer", default="abrupt_end",
+                    help="défauts à régénérer après la narration (défaut : abrupt_end ; \"\" : aucun)")
     ap.add_argument("--only", type=int, help="ne traiter que les N premières séances restantes")
     ap.add_argument("--pas-de-copie", action="store_true",
                     help="ne pas recopier les MP3 à côté des scripts")
@@ -151,6 +169,17 @@ def main() -> int:
             sauver()
             log(f"    ÉCHEC après {minutes:.0f} min — voir {journal.name}")
             continue
+        if args.reparer and reparer(outdir, journal, args, env):
+            # Les chapitres ont changé : la même commande réassemble le MP3
+            # depuis le cache, sans rien synthétiser.
+            with journal.open("a", encoding="utf-8") as fh:
+                fh.write("\n=== réassemblage\n")
+                fh.flush()
+                rc = subprocess.run(cmd, stdout=fh, stderr=subprocess.STDOUT,
+                                    cwd=REPO, env=env).returncode
+            mp3 = livrable(outdir) or mp3
+            log("    segments réparés, séance réassemblée"
+                + ("" if rc == 0 else f" (réassemblage en échec, code {rc} : MP3 d'avant gardé)"))
         if not args.pas_de_copie:
             shutil.copy2(mp3, dossier / mp3.name)
         ok += 1
