@@ -25,6 +25,9 @@ Examples
 
   # Repair every fatally defective segment in one pass:
   ./.venv/Scripts/python.exe scripts/repair_segment.py output/book_mon_livre --all-fatal
+
+  # Repair every segment carrying one of these defects, suspect ones included:
+  ./.venv/Scripts/python.exe scripts/repair_segment.py output/book_mon_livre --codes abrupt_end
 """
 from __future__ import annotations
 
@@ -53,6 +56,9 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Segment to re-generate, e.g. ch003/seg012")
     what.add_argument("--all-fatal", action="store_true",
                       help="Repair every fatally defective segment")
+    what.add_argument("--codes", metavar="CODE[,CODE]",
+                      help="Repair every segment flagged with one of these defects, "
+                           "e.g. abrupt_end — suspect ones included")
     what.add_argument("--attempt", type=int,
                       help="Force an attempt number, so a given take is reproducible")
     what.add_argument("--keep-worse", action="store_true",
@@ -99,13 +105,20 @@ def main() -> int:
     if not flagged:
         print("  (aucun défaut détecté)")
 
-    if args.list or (not args.segment and not args.all_fatal):
+    if args.list or (not args.segment and not args.all_fatal and not args.codes):
         if not args.list:
-            print("\nRien à faire : précisez --segment LABEL ou --all-fatal.")
+            print("\nRien à faire : précisez --segment LABEL, --all-fatal ou --codes.")
         return 0
 
     targets: List[str]
-    if args.all_fatal:
+    if args.codes:
+        codes = {code.strip() for code in args.codes.split(",") if code.strip()}
+        targets = [label for label, report in flagged
+                   if codes & {issue.code for issue in report.issues}]
+        if not targets:
+            print(f"\nAucun segment signalé {', '.join(sorted(codes))} : rien à régénérer.")
+            return 0
+    elif args.all_fatal:
         targets = [label for label, report in flagged if report.fatal]
         if not targets:
             print("\nAucun segment fatalement défectueux : rien à régénérer.")
