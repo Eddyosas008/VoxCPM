@@ -30,6 +30,11 @@ des poids qu'il meurt quand ils manquent. En dessous de 12 Go de RAM, il faut
 `VOXCPM_CPU_DTYPE=bfloat16` : empreinte divisée par deux (~4,4 Go), un peu plus
 lent parce que le bfloat16 est émulé sur processeur.
 
+Sur GPU, le moteur calcule dans la précision du checkpoint (bfloat16). La voix
+rendue en float32 sur processeur — celle des méditations — sonne différemment :
+pour la retrouver sur une carte, `VOXCPM_CUDA_DTYPE=float32`. Le cache range
+alors ces segments sous la même précision que ceux du processeur.
+
 ## Route 1 — un VPS, pour la permanence
 
 **Ce que ça apporte** : la machine tourne en continu. On lance une narration, on

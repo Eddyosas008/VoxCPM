@@ -171,13 +171,16 @@ def pick_runtime_dtype(device: str, configured_dtype: str) -> str:
     is markedly slower than native float32; we therefore upcast low-precision
     checkpoints to float32 for speed (at the cost of ~2x RAM).
 
-    CUDA keeps whatever the checkpoint was trained with.
+    CUDA keeps whatever the checkpoint was trained with, unless
+    ``VOXCPM_CUDA_DTYPE`` asks otherwise (``float32`` reproduces on a GPU the
+    voice rendered in float32 on CPU).
 
-    Override per device with ``VOXCPM_MPS_DTYPE`` / ``VOXCPM_CPU_DTYPE``
-    (e.g. ``bfloat16``) to opt back into the checkpoint dtype.
+    Override per device with ``VOXCPM_MPS_DTYPE`` / ``VOXCPM_CPU_DTYPE`` /
+    ``VOXCPM_CUDA_DTYPE`` (e.g. ``bfloat16``).
     """
-    env_var = {"mps": "VOXCPM_MPS_DTYPE", "cpu": "VOXCPM_CPU_DTYPE"}.get(device)
-    if env_var is None:  # cuda (and any other device): keep the checkpoint dtype
+    kind = (device or "").split(":")[0]
+    env_var = {"mps": "VOXCPM_MPS_DTYPE", "cpu": "VOXCPM_CPU_DTYPE", "cuda": "VOXCPM_CUDA_DTYPE"}.get(kind)
+    if env_var is None:  # any other device: keep the checkpoint dtype
         return configured_dtype
 
     override = os.environ.get(env_var, "").strip().lower()
@@ -185,6 +188,8 @@ def pick_runtime_dtype(device: str, configured_dtype: str) -> str:
         if override not in _VALID_DTYPE_OVERRIDES:
             raise ValueError(f"{env_var}='{override}' is not one of {sorted(_VALID_DTYPE_OVERRIDES)}")
         return override
+    if kind == "cuda":
+        return configured_dtype
 
     if (configured_dtype or "").lower() in _LOW_PRECISION_DTYPES:
         return "float32"
