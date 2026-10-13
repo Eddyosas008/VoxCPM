@@ -42,12 +42,16 @@ def runtime_dtype_label(device: str, env: Optional[dict] = None) -> str:
     CPU and MPS compute in float32 unless ``VOXCPM_CPU_DTYPE`` /
     ``VOXCPM_MPS_DTYPE`` opts back into a lower precision; CUDA keeps the
     checkpoint's own dtype, named ``"checkpoint"`` here so the label does not
-    depend on which checkpoint is loaded. Same seed, different precision,
+    depend on which checkpoint is loaded — unless ``VOXCPM_CUDA_DTYPE`` names
+    one, in which case a GPU rendering in float32 shares the CPU's label. Same seed, different precision,
     different audio — so this belongs in the cache key.
     """
     env = os.environ if env is None else env
     device = (device or "cpu").lower()
-    var = {"cpu": "VOXCPM_CPU_DTYPE", "mps": "VOXCPM_MPS_DTYPE"}.get(device.split(":")[0])
+    kind = device.split(":")[0]
+    if kind == "cuda":
+        return (env.get("VOXCPM_CUDA_DTYPE") or "").strip().lower() or "checkpoint"
+    var = {"cpu": "VOXCPM_CPU_DTYPE", "mps": "VOXCPM_MPS_DTYPE"}.get(kind)
     if var is None:
         return "checkpoint"
     override = (env.get(var) or "").strip().lower()

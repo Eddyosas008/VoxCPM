@@ -137,3 +137,4 @@ class TestLaPrecisionFaitPartieDeLaCle:
         assert runtime_dtype_label("mps", {"VOXCPM_MPS_DTYPE": " Float16 "}) == "float16"
         assert runtime_dtype_label("cuda", {"VOXCPM_CPU_DTYPE": "bfloat16"}) == "checkpoint"
         assert runtime_dtype_label("cuda:1", {}) == "checkpoint"
+        assert runtime_dtype_label("cuda", {"VOXCPM_CUDA_DTYPE": "float32"}) == "float32"
