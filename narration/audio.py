@@ -106,6 +106,17 @@ class MasteringSettings:
     #: settings themselves, so a saved plan stays a flat JSON object; the
     #: amounts are passed to :func:`stitch` separately when they need changing.
     polish: bool = True
+    #: Level, in dBFS RMS, of a soft room tone laid under the whole chapter.
+    #: ``None`` leaves digital silence. Between phrases, true silence sounds
+    #: like the line went dead, which is what gives generated narration away
+    #: in a meditation, where a third of the running time is silence. Kept
+    #: well under the ACX noise floor (-60 dBFS).
+    room_tone_db: Optional[float] = None
+    #: Spread applied to every pause, as a fraction (0.12 = up to 12 % longer
+    #: or shorter). Identical pauses are heard as a metronome. Deterministic:
+    #: the same chapter always gets the same pauses, so a repair reassembles it
+    #: identically.
+    pause_jitter: float = 0.0
 
 
 # --------------------------------------------------------------------------
@@ -485,11 +496,14 @@ def stitch(
         pieces.append(silence(sr, settings.lead_sec))
 
     last = len(segments) - 1
+    spread = np.random.default_rng(0)
     for index, (wav, pause_after) in enumerate(segments):
         processed = master_segment(wav, sr, settings)
         if processed.size:
             pieces.append(processed)
         if index != last and pause_after > 0:
+            if settings.pause_jitter > 0:
+                pause_after *= 1.0 + spread.uniform(-settings.pause_jitter, settings.pause_jitter)
             pieces.append(silence(sr, pause_after))
 
     if settings.tail_sec > 0:
@@ -513,7 +527,21 @@ def stitch(
             target_rms_db=settings.target_rms_db,
             peak_ceiling_db=settings.peak_ceiling_db,
         )
+    if settings.room_tone_db is not None and chapter.size:
+        # After the levelling, so the tone sits at the level asked for.
+        chapter = (chapter + room_tone(chapter.size, settings.room_tone_db)).astype(np.float32)
     return chapter
+
+
+def room_tone(frames: int, level_db: float, seed: int = 0) -> np.ndarray:
+    """A soft, dark noise floor, like a quiet room: white noise through a
+    one-pole low-pass, so it is heard as air rather than hiss."""
+    from scipy.signal import lfilter
+
+    white = np.random.default_rng(seed).standard_normal(frames)
+    dark = lfilter([0.05], [1.0, -0.95], white)
+    rms = float(np.sqrt(np.mean(np.square(dark)))) or 1.0
+    return (dark * (10.0 ** (level_db / 20.0) / rms)).astype(np.float32)
 
 
 def concatenate(

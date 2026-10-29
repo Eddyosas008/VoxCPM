@@ -70,7 +70,9 @@ def commande(txt: pathlib.Path, outdir: pathlib.Path, titre: str, args) -> List[
     cmd += ["--cover", args.cover] if args.cover else ["--no-cover"]
     for lex in args.lexicon:
         cmd += ["--lexicon", lex]
-    return cmd
+    # Tout argument inconnu ici passe tel quel à narrate_book : --cfg, --steps,
+    # --pause-sentence, --room-tone… sans tout redéclarer.
+    return cmd + list(getattr(args, "reglages", []))
 
 
 def reparer(outdir: pathlib.Path, journal: pathlib.Path, args, env) -> bool:
@@ -108,7 +110,7 @@ def main() -> int:
     ap.add_argument("--only", type=int, help="ne traiter que les N premières séances restantes")
     ap.add_argument("--pas-de-copie", action="store_true",
                     help="ne pas recopier les MP3 à côté des scripts")
-    args = ap.parse_args()
+    args, args.reglages = ap.parse_known_args()
     if args.lexicon is None:
         args.lexicon = [str(REPO / "conf" / "pronunciation_fr.json")]
 

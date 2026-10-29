@@ -45,7 +45,8 @@ class Verdict:
         return not self.defauts
 
 
-def verifier(fichier: pathlib.Path, minutes_cible: float, tolerance: float) -> Verdict:
+def verifier(fichier: pathlib.Path, minutes_cible: float, tolerance: float,
+             exiger_mention: bool = True) -> Verdict:
     v = Verdict(fichier)
     try:
         texte = fichier.read_text(encoding="utf-8")
@@ -78,7 +79,7 @@ def verifier(fichier: pathlib.Path, minutes_cible: float, tolerance: float) -> V
         v.defauts.append("markdown dans le texte")
     if re.search(r"[;—]", prononce):
         v.defauts.append("point-virgule ou tiret cadratin")
-    if MENTION not in prononce.lower():
+    if exiger_mention and MENTION not in prononce.lower():
         v.defauts.append("mention finale absente")
     if re.search(r"\b(etc|ex|cf)\.", prononce, re.I):
         v.defauts.append("abréviation")
@@ -97,13 +98,15 @@ def main() -> int:
     ap.add_argument("--minutes", type=float, default=15.0, help="durée cible (défaut : 15)")
     ap.add_argument("--tolerance", type=float, default=1.5, help="écart admis en minutes (défaut : 1,5)")
     ap.add_argument("--attendus", type=int, default=0, help="nombre de fichiers attendus (0 = pas de contrôle)")
+    ap.add_argument("--sans-mention", action="store_true",
+                    help="la mention finale est affichée en texte, pas narrée : ne pas l'exiger")
     args = ap.parse_args()
 
     dossier = pathlib.Path(args.dossier)
     fichiers = sorted(dossier.glob("*.txt"))
     if args.attendus and len(fichiers) != args.attendus:
         print(f"{len(fichiers)} fichier(s) .txt, {args.attendus} attendus")
-    verdicts = [verifier(f, args.minutes, args.tolerance) for f in fichiers]
+    verdicts = [verifier(f, args.minutes, args.tolerance, not args.sans_mention) for f in fichiers]
 
     print(f"{'fichier':<52} {'mots':>5} {'silence':>8} {'min':>5}  défauts")
     for v in verdicts:

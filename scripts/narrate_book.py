@@ -177,6 +177,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"Pause after a paragraph (default: {defaults.paragraph}s)")
     pauses.add_argument("--silence", type=float,
                         help="Force one uniform pause everywhere, overriding the three above")
+    pauses.add_argument("--pause-jitter", type=float, default=0.0, metavar="FRACTION",
+                        help="Vary every pause by up to this fraction (0.12 = ±12 %%), "
+                             "so pauses do not fall like a metronome (default: 0)")
+    pauses.add_argument("--room-tone", type=float, metavar="DBFS",
+                        help="Lay a soft room tone at this level under the chapter instead of "
+                             "digital silence (e.g. -66; ACX floor is -60). Default: none")
     pauses.add_argument("--target-rms", type=float, default=audio_tools.MasteringSettings().target_rms_db,
                         help="Loudness target in dBFS (ACX window is -23..-18, default: -20)")
     pauses.add_argument("--no-master", action="store_true",
@@ -455,7 +461,8 @@ def main() -> int:
     )
     cache = cache_tools.ChunkCache(outdir / ".cache", enabled=not args.no_cache)
     mastering = audio_tools.MasteringSettings(
-        target_rms_db=args.target_rms, polish=not args.no_polish
+        target_rms_db=args.target_rms, polish=not args.no_polish,
+        room_tone_db=args.room_tone, pause_jitter=args.pause_jitter,
     )
 
     # The plan is what makes a later repair possible: without it, which cache
