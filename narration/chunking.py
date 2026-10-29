@@ -68,6 +68,9 @@ class PauseProfile:
     sentence: float = 0.45
     #: Segment ends a paragraph.
     paragraph: float = 0.9
+    #: Multiplies the silences measured by MindScript cues. A guided meditation
+    #: heard at bedtime wants them longer than the script's author wrote them.
+    cue_scale: float = 1.0
 
     def for_segment(self, text: str, ends_paragraph: bool) -> float:
         if ends_paragraph:
@@ -150,8 +153,12 @@ def _split_long_sentence(sentence: str, max_chars: int) -> List[str]:
     return pieces or [sentence]
 
 
-def _pack_sentences(text: str, max_chars: int) -> List[str]:
+def _pack_sentences(text: str, max_chars: int, merge: bool = True) -> List[str]:
     """Greedily pack whole sentences into chunks no longer than ``max_chars``.
+
+    With ``merge=False`` every sentence is its own chunk, so that the pause
+    after each one is ours rather than the engine's: inside a chunk the model
+    paces the sentences itself, and too briskly for a meditation.
 
     A sentence longer than the limit is cut at clause boundaries rather than
     sent whole — see ``_split_long_sentence`` for why that trade was reversed.
@@ -168,7 +175,7 @@ def _pack_sentences(text: str, max_chars: int) -> List[str]:
                 chunks.append(current)
                 current = ""
             chunks.extend(_split_long_sentence(sentence, max_chars))
-        elif current and len(current) + 1 + len(sentence) > max_chars:
+        elif current and (not merge or len(current) + 1 + len(sentence) > max_chars):
             chunks.append(current)
             current = sentence
         else:
@@ -245,6 +252,7 @@ def split_into_segments(
     text: str,
     max_chars: int = DEFAULT_MAX_CHARS,
     profile: PauseProfile = PauseProfile(),
+    one_sentence: bool = False,
 ) -> List[Segment]:
     """Segment a chapter and decide how long the silence after each part is.
 
@@ -264,7 +272,7 @@ def split_into_segments(
         if not runs:
             # Paragraph made only of cues: the author measured the gap that
             # follows what was said last — their figure replaces the guess.
-            forced = sum(
+            forced = profile.cue_scale * sum(
                 cues.cue_seconds(m) or 0.0 for m in cues.CUE_RE.finditer(paragraph)
             )
             if segments and forced > 0.0:
@@ -276,12 +284,12 @@ def split_into_segments(
                 )
             continue
         for run_index, (run_text, forced_pause) in enumerate(runs):
-            chunks = _pack_sentences(run_text, max_chars)
+            chunks = _pack_sentences(run_text, max_chars, merge=not one_sentence)
             ends_paragraph = run_index == len(runs) - 1
             for chunk_index, chunk in enumerate(chunks):
                 is_last_chunk = chunk_index == len(chunks) - 1
                 if is_last_chunk and forced_pause is not None:
-                    pause = forced_pause
+                    pause = forced_pause * profile.cue_scale
                 else:
                     pause = profile.for_segment(
                         chunk, ends_paragraph and is_last_chunk

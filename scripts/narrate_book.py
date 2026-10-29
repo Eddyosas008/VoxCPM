@@ -175,6 +175,12 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"Pause after a sentence (default: {defaults.sentence}s)")
     pauses.add_argument("--pause-paragraph", type=float, default=defaults.paragraph,
                         help=f"Pause after a paragraph (default: {defaults.paragraph}s)")
+    pauses.add_argument("--cue-scale", type=float, default=1.0, metavar="FACTEUR",
+                        help="Multiply the silences of MindScript cues ([PAUSE:DEEP], "
+                             "[SILENCE 20]) by this factor (default: 1)")
+    pauses.add_argument("--one-sentence", action="store_true",
+                        help="One sentence per segment, so the sentence pause follows every "
+                             "sentence instead of only the last of each chunk (meditation)")
     pauses.add_argument("--silence", type=float,
                         help="Force one uniform pause everywhere, overriding the three above")
     pauses.add_argument("--pause-jitter", type=float, default=0.0, metavar="FRACTION",
@@ -353,14 +359,19 @@ def main() -> int:
         chapters = raw_chapters
 
     if args.silence is not None:
-        profile = chunking.PauseProfile(clause=args.silence, sentence=args.silence, paragraph=args.silence)
+        profile = chunking.PauseProfile(
+            clause=args.silence, sentence=args.silence, paragraph=args.silence, cue_scale=args.cue_scale
+        )
     else:
         profile = chunking.PauseProfile(
-            clause=args.pause_clause, sentence=args.pause_sentence, paragraph=args.pause_paragraph
+            clause=args.pause_clause, sentence=args.pause_sentence, paragraph=args.pause_paragraph,
+            cue_scale=args.cue_scale,
         )
 
     plan = [
-        (index, chunking.split_into_segments(chapter, args.chunk_max_chars, profile))
+        (index, chunking.split_into_segments(
+            chapter, args.chunk_max_chars, profile, one_sentence=args.one_sentence
+        ))
         for index, chapter in enumerate(chapters, 1)
     ]
     total_segments = sum(len(segments) for _, segments in plan)
