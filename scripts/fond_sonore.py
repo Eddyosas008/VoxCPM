@@ -104,17 +104,45 @@ def vagues(n: int, rng: np.random.Generator) -> np.ndarray:
     return np.stack(canaux, axis=1)
 
 
+def sons(n: int, dossier: Path, rng: np.random.Generator, fondu: float = 6.0) -> np.ndarray:
+    """Les fichiers d'un dossier, dans un ordre tiré au sort, enchaînés en
+    fondu jusqu'à couvrir la séance : on ne repère pas de boucle."""
+    fichiers = sorted(p for p in dossier.iterdir() if p.suffix.lower() in (".mp3", ".wav", ".m4a", ".ogg", ".flac"))
+    if not fichiers:
+        raise SystemExit(f"aucun son dans {dossier}")
+    f = int(fondu * SR)
+    rampe = np.linspace(0, 1, f)[:, None]
+    sortie = np.zeros((0, 2))
+    while sortie.shape[0] < n:
+        for p in rng.permutation(len(fichiers)):
+            brut = subprocess.run(
+                ["ffmpeg", "-v", "error", "-i", str(fichiers[p]), "-ac", "2", "-ar", str(SR), "-f", "f32le", "-"],
+                check=True, capture_output=True,
+            ).stdout
+            x = np.frombuffer(brut, dtype=np.float32).reshape(-1, 2).astype(np.float64)
+            x /= np.sqrt(np.mean(np.square(x))) + 1e-12
+            if sortie.shape[0] >= f and x.shape[0] > 2 * f:
+                x[:f] *= rampe
+                sortie[-f:] *= rampe[::-1]
+                sortie[-f:] += x[:f]
+                x = x[f:]
+            sortie = np.concatenate([sortie, x])
+            if sortie.shape[0] >= n:
+                break
+    return sortie[:n]
+
+
 def rms_db(x: np.ndarray) -> float:
     return 20 * np.log10(np.sqrt(np.mean(np.square(x))) + 1e-12)
 
 
 def poser(voix: np.ndarray, ambiance: str, niveau: float, effacement: float,
-          traine: float, graine: int) -> np.ndarray:
+          traine: float, graine: int, dossier: Path | None = None) -> np.ndarray:
     n = voix.size + int(traine * SR)
     rng = np.random.default_rng(graine)
-    fond = np.zeros((n, 2))
+    fond = sons(n, dossier, rng) if dossier else np.zeros((n, 2))
     for nom, poids in (("nappe", 1.0), ("vagues", 0.8)):
-        if nom in ambiance:
+        if nom in ambiance and dossier is None:
             couche = nappe(n, rng) if nom == "nappe" else vagues(n, rng)
             couche /= np.sqrt(np.mean(np.square(couche))) + 1e-12
             fond += poids * couche
@@ -155,6 +183,7 @@ def main(argv=None) -> int:
     ap.add_argument("entree", type=Path, help="un MP3, ou un dossier où chercher les *_complet.mp3")
     ap.add_argument("sortie", type=Path, nargs="?", help="MP3 de sortie (fichier unique)")
     ap.add_argument("--ambiance", default="nappe+vagues", help="nappe, vagues ou nappe+vagues")
+    ap.add_argument("--sons", type=Path, help="dossier de sons à enchaîner à la place de l'ambiance synthétisée")
     ap.add_argument("--niveau", type=float, default=-33.0, help="niveau du fond en dBFS RMS (défaut -33)")
     ap.add_argument("--effacement", type=float, default=5.0, help="dB retirés au fond sous la voix (défaut 5)")
     ap.add_argument("--traine", type=float, default=45.0, help="secondes de fond après la voix (défaut 45)")
@@ -170,7 +199,8 @@ def main(argv=None) -> int:
         travaux = [(args.entree, args.sortie or args.entree.with_name(args.entree.stem + args.suffixe + ".mp3"))]
     for i, (src, dst) in enumerate(travaux):
         voix = lire(src, args.tempo)
-        mix = poser(voix, args.ambiance, args.niveau, args.effacement, args.traine, graine=i)
+        mix = poser(voix, args.ambiance, args.niveau, args.effacement, args.traine, graine=i,
+                    dossier=args.sons)
         ecrire(dst, mix, args.bitrate)
         print(f"{dst.name} : {mix.shape[0] / SR / 60:.1f} min", flush=True)
     return 0
