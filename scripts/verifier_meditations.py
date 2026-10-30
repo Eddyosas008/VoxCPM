@@ -19,7 +19,7 @@ import pathlib
 import re
 import sys
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional, Tuple
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
@@ -28,6 +28,14 @@ from narration import cues  # noqa: E402
 #: Débit de lecture retenu pour estimer la durée : la voix de méditation lit
 #: lentement, cent trente mots par minute mesurés sur la série 01.
 MOTS_PAR_MINUTE = 130.0
+
+#: La narration lente (une phrase par segment, --cue-scale 1.15) puis le fond
+#: sonore (voix à 0.94, quarante-cinq secondes de traîne), mesurés sur la
+#: série 03 : 0,55 s par mot, pauses de phrase comprises.
+SECONDES_PAR_MOT_LENT = 0.55
+ECHELLE_REPERES_LENT = 1.15
+TEMPO_FOND = 0.94
+TRAINE_FOND_S = 45.0
 
 MENTION = "ne remplace pas l'avis d'un professionnel"
 
@@ -46,7 +54,8 @@ class Verdict:
 
 
 def verifier(fichier: pathlib.Path, minutes_cible: float, tolerance: float,
-             exiger_mention: bool = True) -> Verdict:
+             exiger_mention: bool = True, lent: bool = False,
+             plage: Optional[Tuple[float, float]] = None) -> Verdict:
     v = Verdict(fichier)
     try:
         texte = fichier.read_text(encoding="utf-8")
@@ -64,9 +73,16 @@ def verifier(fichier: pathlib.Path, minutes_cible: float, tolerance: float,
     v.silence_s = sum(s for _, s in cues.split_on_cues(texte) if s)
     prononce = cues.strip_cues(texte)
     v.mots = len(re.findall(r"[A-Za-zÀ-ÿ'’-]+", prononce))
-    v.minutes = v.mots / MOTS_PAR_MINUTE + v.silence_s / 60.0
+    if lent:
+        brut = SECONDES_PAR_MOT_LENT * v.mots + ECHELLE_REPERES_LENT * v.silence_s
+        v.minutes = (brut / TEMPO_FOND + TRAINE_FOND_S) / 60.0
+    else:
+        v.minutes = v.mots / MOTS_PAR_MINUTE + v.silence_s / 60.0
 
-    if abs(v.minutes - minutes_cible) > tolerance:
+    if plage is not None:
+        if not plage[0] <= v.minutes <= plage[1]:
+            v.defauts.append(f"durée estimée {v.minutes:.1f} min, hors de {plage[0]:.0f} à {plage[1]:.0f}")
+    elif abs(v.minutes - minutes_cible) > tolerance:
         v.defauts.append(f"durée estimée {v.minutes:.1f} min, cible {minutes_cible:.0f} ± {tolerance:.0f}")
     if re.search(r"\d", prononce):
         v.defauts.append("chiffre dans le texte prononcé (à écrire en lettres)")
@@ -100,13 +116,18 @@ def main() -> int:
     ap.add_argument("--attendus", type=int, default=0, help="nombre de fichiers attendus (0 = pas de contrôle)")
     ap.add_argument("--sans-mention", action="store_true",
                     help="la mention finale est affichée en texte, pas narrée : ne pas l'exiger")
+    ap.add_argument("--lent", action="store_true",
+                    help="estimer la durée d'écoute de la version lente avec fond sonore")
+    ap.add_argument("--plage", type=float, nargs=2, metavar=("MIN", "MAX"),
+                    help="durée admise en minutes, à la place de --minutes et --tolerance")
     args = ap.parse_args()
 
     dossier = pathlib.Path(args.dossier)
-    fichiers = sorted(dossier.glob("*.txt"))
+    fichiers = sorted(f for f in dossier.glob("*.txt") if f.name[:2].isdigit())
     if args.attendus and len(fichiers) != args.attendus:
         print(f"{len(fichiers)} fichier(s) .txt, {args.attendus} attendus")
-    verdicts = [verifier(f, args.minutes, args.tolerance, not args.sans_mention) for f in fichiers]
+    verdicts = [verifier(f, args.minutes, args.tolerance, not args.sans_mention,
+                         args.lent, tuple(args.plage) if args.plage else None) for f in fichiers]
 
     print(f"{'fichier':<52} {'mots':>5} {'silence':>8} {'min':>5}  défauts")
     for v in verdicts:
