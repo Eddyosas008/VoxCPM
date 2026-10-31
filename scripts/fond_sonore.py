@@ -104,6 +104,63 @@ def vagues(n: int, rng: np.random.Generator) -> np.ndarray:
     return np.stack(canaux, axis=1)
 
 
+def pluie(n: int, rng: np.random.Generator) -> np.ndarray:
+    """Une pluie fine sur un toit : un souffle clair qui varie lentement, et des
+    gouttes éparses, chacune un petit claquement étouffé."""
+    canaux = []
+    for _ in range(2):
+        souffle = passe_bas(rng.standard_normal(n), 3500) - passe_bas(rng.standard_normal(n), 400) * 0.3
+        souffle *= 0.6 + 0.4 * lent(n, rng, (8, 25))
+        gouttes = np.zeros(n)
+        for pos in rng.integers(0, n, size=int(n / SR * 6)):
+            d = int(0.02 * SR)
+            gouttes[pos:pos + d] += rng.uniform(0.3, 1.0) * np.exp(-np.arange(min(d, n - pos)) / (0.004 * SR))
+        canaux.append(souffle + passe_bas(gouttes, 2000) * 6)
+    return np.stack(canaux, axis=1)
+
+
+def vent(n: int, rng: np.random.Generator) -> np.ndarray:
+    """Un vent doux dans les arbres : deux bandes de bruit qui se relaient au
+    rythme de rafales lentes."""
+    canaux = []
+    for _ in range(2):
+        grave = passe_bas(rng.standard_normal(n), 250)
+        aigu = passe_bas(rng.standard_normal(n), 1200) - passe_bas(rng.standard_normal(n), 300)
+        rafale = lent(n, rng, (6, 18)) ** 2
+        canaux.append(grave * (0.5 + 0.5 * rafale) * 3 + aigu * rafale * 0.5)
+    return np.stack(canaux, axis=1)
+
+
+def bols(n: int, rng: np.random.Generator) -> np.ndarray:
+    """Un bol chantant effleuré toutes les vingt-cinq à quarante-cinq secondes :
+    trois partiels inharmoniques qui battent doucement et s'éteignent longtemps."""
+    sortie = np.zeros((n, 2))
+    pos = int(rng.uniform(4, 12) * SR)
+    while pos < n:
+        f = rng.choice([174.6, 196.0, 220.0, 261.6])
+        d = min(n - pos, int(14 * SR))
+        t = np.arange(d) / SR
+        son = np.zeros(d)
+        for rapport, a, tau in ((1.0, 1.0, 9.0), (2.76, 0.45, 5.0), (5.4, 0.2, 2.5)):
+            son += a * np.sin(2 * np.pi * f * rapport * t) * (1 + 0.15 * np.sin(2 * np.pi * 0.8 * t)) * np.exp(-t / tau)
+        attaque = np.minimum(1, t / 0.08)
+        g = rng.uniform(0.35, 0.65)
+        sortie[pos:pos + d, 0] += son * attaque * g
+        sortie[pos:pos + d, 1] += son * attaque * (1 - g)
+        pos += int(rng.uniform(25, 45) * SR)
+    return sortie
+
+
+#: Les ambiances synthétisées, et leur poids quand on les mêle (« nappe+bols »).
+COUCHES = {"nappe": (nappe, 1.0), "vagues": (vagues, 0.8), "pluie": (pluie, 0.9),
+           "vent": (vent, 0.8), "bols": (bols, 0.7)}
+
+
+#: L'ordre des fonds en mode « rotation » : d'une séance à la suivante le fond
+#: change, et « sons » désigne le dossier passé par --sons.
+ROTATION = ["sons", "nappe+vagues", "pluie+nappe", "nappe+bols", "vent+bols", "vagues", "pluie"]
+
+
 def sons(n: int, dossier: Path, rng: np.random.Generator, fondu: float = 6.0) -> np.ndarray:
     """Les fichiers d'un dossier, dans un ordre tiré au sort, enchaînés en
     fondu jusqu'à couvrir la séance : on ne repère pas de boucle."""
@@ -141,9 +198,9 @@ def poser(voix: np.ndarray, ambiance: str, niveau: float, effacement: float,
     n = voix.size + int(traine * SR)
     rng = np.random.default_rng(graine)
     fond = sons(n, dossier, rng) if dossier else np.zeros((n, 2))
-    for nom, poids in (("nappe", 1.0), ("vagues", 0.8)):
-        if nom in ambiance and dossier is None:
-            couche = nappe(n, rng) if nom == "nappe" else vagues(n, rng)
+    for nom, (fabrique, poids) in COUCHES.items():
+        if nom in ambiance.split("+") and dossier is None:
+            couche = fabrique(n, rng)
             couche /= np.sqrt(np.mean(np.square(couche))) + 1e-12
             fond += poids * couche
     fond *= 10 ** ((niveau - rms_db(fond)) / 20)
@@ -182,7 +239,8 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("entree", type=Path, help="un MP3, ou un dossier où chercher les *_complet.mp3")
     ap.add_argument("sortie", type=Path, nargs="?", help="MP3 de sortie (fichier unique)")
-    ap.add_argument("--ambiance", default="nappe+vagues", help="nappe, vagues ou nappe+vagues")
+    ap.add_argument("--ambiance", default="nappe+vagues", help="une ou plusieurs couches jointes par + : "
+                    + ", ".join(COUCHES) + " (défaut nappe+vagues)")
     ap.add_argument("--sons", type=Path, help="dossier de sons à enchaîner à la place de l'ambiance synthétisée")
     ap.add_argument("--niveau", type=float, default=-33.0, help="niveau du fond en dBFS RMS (défaut -33)")
     ap.add_argument("--effacement", type=float, default=5.0, help="dB retirés au fond sous la voix (défaut 5)")
@@ -197,12 +255,25 @@ def main(argv=None) -> int:
                    for p in sorted(args.entree.rglob("*_complet.mp3"))]
     else:
         travaux = [(args.entree, args.sortie or args.entree.with_name(args.entree.stem + args.suffixe + ".mp3"))]
+    import zlib
+
     for i, (src, dst) in enumerate(travaux):
+        ambiance, dossier = args.ambiance, args.sons
+        if ambiance == "rotation":
+            # Le numéro de la séance choisit le fond, décalé par série pour que
+            # les premières séances de deux séries n'aient pas le même.
+            numero = int(src.name[:2]) if src.name[:2].isdigit() else i
+            rang = numero + zlib.crc32(src.parent.parent.name.encode())
+            ambiance = ROTATION[rang % len(ROTATION)]
+            if ambiance != "sons" or dossier is None:
+                dossier = None
+                if ambiance == "sons":
+                    ambiance = "nappe+vagues"
         voix = lire(src, args.tempo)
-        mix = poser(voix, args.ambiance, args.niveau, args.effacement, args.traine, graine=i,
-                    dossier=args.sons)
+        mix = poser(voix, ambiance, args.niveau, args.effacement, args.traine, graine=i,
+                    dossier=dossier)
         ecrire(dst, mix, args.bitrate)
-        print(f"{dst.name} : {mix.shape[0] / SR / 60:.1f} min", flush=True)
+        print(f"{dst.name} : {mix.shape[0] / SR / 60:.1f} min, fond {ambiance}", flush=True)
     return 0
 
 
