@@ -120,3 +120,24 @@ def test_reparer_vide_coupe_la_reparation(monkeypatch, tmp_path):
     d = _serie(tmp_path)
     _, appels = _lancer(monkeypatch, tmp_path, d, None, "--reparer", "")
     assert not any(a[1].startswith("réparation") for a in appels)
+
+
+def test_le_titre_s_arrete_au_format_comme_a_l_outil(tmp_path):
+    (tmp_path / "THEMES.md").write_text(
+        "# Série\n\n"
+        "01 La première semaine. Format : moyen. Moment : le soir. Outil : trois points.\n"
+        "02 Le matin anxieux — commencer la journée. Outil : expirer.\n",
+        encoding="utf-8")
+    assert narrer_serie.titres_du_dossier(tmp_path) == {"01": "La première semaine",
+                                              "02": "Le matin anxieux"}
+
+
+def test_la_voix_tourne_d_une_seance_a_l_autre():
+    class Args:
+        voice = "Fixe"
+        voix_rotation = "A|B|C"
+    voix = [narrer_serie.voix_de(f"{i:02d}_x", "serie-04", Args) for i in range(1, 7)]
+    assert set(voix) == {"A", "B", "C"}
+    assert voix[:3] == voix[3:]
+    Args.voix_rotation = None
+    assert narrer_serie.voix_de("01_x", "serie-04", Args) == "Fixe"

@@ -46,7 +46,8 @@ def titres_du_dossier(dossier: pathlib.Path) -> Dict[str, str]:
     if not chemin.is_file():
         return titres
     for ligne in chemin.read_text(encoding="utf-8").splitlines():
-        m = re.match(r"^(\d\d)\s+(.+?)(?:\s+—\s|\.\s+Outil\s*:|$)", ligne.strip())
+        m = re.match(r"^(\d\d)\s+(.+?)(?:\s+—\s|\.\s+(?:Outil|Format|Moment|Métaphore)\s*:|$)",
+                     ligne.strip())
         if m:
             titres[m.group(1)] = m.group(2).strip().rstrip(".")
     return titres
