@@ -29,6 +29,7 @@ import shutil
 import subprocess
 import sys
 import time
+import zlib
 from typing import Dict, List, Optional
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -61,9 +62,19 @@ def livrable(outdir: pathlib.Path) -> Optional[pathlib.Path]:
     return trouves[0] if trouves else None
 
 
-def commande(txt: pathlib.Path, outdir: pathlib.Path, titre: str, args) -> List[str]:
+def voix_de(slug: str, serie: str, args) -> str:
+    """La voix d'une séance : fixe, ou tournante selon son numéro et la série."""
+    if not args.voix_rotation:
+        return args.voice
+    pool = [v.strip() for v in args.voix_rotation.split("|") if v.strip()]
+    numero = int(slug[:2]) if slug[:2].isdigit() else 0
+    return pool[(numero + zlib.crc32(serie.encode())) % len(pool)]
+
+
+def commande(txt: pathlib.Path, outdir: pathlib.Path, titre: str, args,
+             voix: Optional[str] = None) -> List[str]:
     cmd = [sys.executable, str(REPO / "scripts" / "narrate_book.py"), str(txt),
-           "--voice", args.voice, "--title", titre,
+           "--voice", voix or args.voice, "--title", titre,
            "--no-credits", "--assemble", "mp3",
            "--outdir", str(outdir), "--device", args.device,
            "--qc-retries", str(args.qc_retries)]
@@ -96,6 +107,8 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("dossier", help="dossier des scripts .txt")
     ap.add_argument("--voice", default="Aurore — méditation guidée")
+    ap.add_argument("--voix-rotation", metavar="V1|V2|...",
+                    help="voix qui tournent d'une séance à l'autre, séparées par | (remplace --voice)")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--outroot", default=str(REPO / "output" / "meditations"))
     ap.add_argument("--lexicon", action="append", default=None)
@@ -134,7 +147,7 @@ def main() -> int:
     if args.only:
         restants = restants[: args.only]
     log(f"série {serie} : {len(scripts)} script(s), {len(scripts) - len(restants) if not args.only else '?'} "
-        f"déjà rendu(s), {len(restants)} à narrer — voix « {args.voice} », {args.device}")
+        f"déjà rendu(s), {len(restants)} à narrer — voix « {args.voix_rotation or args.voice} », {args.device}")
 
     env = dict(os.environ)
     env.setdefault("PYTHONIOENCODING", "utf-8")
@@ -144,9 +157,10 @@ def main() -> int:
         outdir = outroot / slug
         titre = titres.get(slug[:2], titre_depuis_slug(slug))
         journal = outroot / f"{slug}.log"
-        cmd = commande(txt, outdir, titre, args)
-        log(f"[{i}/{len(restants)}] {slug} — « {titre} »")
-        etat[slug] = {"status": "running", "title": titre,
+        voix = voix_de(slug, serie, args)
+        cmd = commande(txt, outdir, titre, args, voix)
+        log(f"[{i}/{len(restants)}] {slug} — « {titre} » — {voix}")
+        etat[slug] = {"status": "running", "title": titre, "voice": voix,
                       "started": time.strftime("%Y-%m-%d %H:%M:%S")}
         sauver()
         t0 = time.time()
